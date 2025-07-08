@@ -1,0 +1,176 @@
+spring:
+  application:
+    name: runtrack
+
+  # 데이터베이스 설정 - H2 인메모리 데이터베이스 사용 (테스트용)
+  datasource:
+    url: jdbc:h2:mem:testdb
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  # H2 콘솔 설정
+  h2:
+    console:
+      enabled: true
+
+  # JPA 설정
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        use_sql_comments: true
+
+  # 파일 업로드 설정
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+
+  # Jackson 설정
+  jackson:
+    time-zone: Asia/Seoul
+    date-format: yyyy-MM-dd'T'HH:mm:ss
+
+  # Redis 설정
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+
+  # 정적 리소스 설정
+  web:
+    resources:
+      static-locations: classpath:/static/
+      cache:
+        cachecontrol:
+          max-age: 0 # 개발 중 캐시 비활성화
+
+# 서버 설정
+server:
+  port: 8080
+  servlet:
+    context-path: /
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+  compression:
+    enabled: false # HTML 압축으로 인한 인코딩 문제 방지
+
+# 로깅 설정
+logging:
+  level:
+    com.sponovation.runtrack: DEBUG
+    org.springframework.web: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/runtrack.log
+
+# Swagger/OpenAPI 설정
+springdoc:
+  packages-to-scan: com.sponovation.runtrack
+  default-consumes-media-type: application/json;charset=UTF-8
+  default-produces-media-type: application/json;charset=UTF-8
+  swagger-ui:
+    path: /
+    disable-swagger-default-url: true
+    display-request-duration: true
+    operations-sorter: alpha
+    tags-sorter: alpha
+  api-docs:
+    enabled: true
+    path: /api-docs
+
+# AWS 설정 (S3 연결 필요 시 사용)
+aws:
+  access-key-id: ${AWS_ACCESS_KEY_ID:dummy}
+  secret-access-key: ${AWS_SECRET_ACCESS_KEY:dummy}
+  region: ${AWS_REGION:ap-northeast-2}
+  s3:
+    bucket-name: ${AWS_S3_BUCKET_NAME:runtrack-gpx-files}
+
+# 코스 데이터 설정
+course:
+  cache:
+    ttl-hours: 24
+  interpolation:
+    distance-meters: 100
+
+# 애플리케이션 커스텀 설정
+app:
+  notification:
+    enabled: true
+  tracking:
+    gps-accuracy-threshold: 50.0
+    route-deviation-threshold: 100.0
+    min-time-interval: 5
+  gpx:
+    max-file-size: 5MB
+    checkpoint-interval: 1000.0
+
+---
+# 개발 환경 설정
+spring:
+  config:
+    activate:
+      on-profile: dev
+  datasource:
+    url: jdbc:h2:mem:devdb
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: true
+
+logging:
+  level:
+    com.sponovation.runtrack: DEBUG
+
+---
+# 운영 환경 설정
+spring:
+  config:
+    activate:
+      on-profile: prod
+  datasource:
+    url: jdbc:mysql://localhost:3306/runtrack
+    username: ${DB_USERNAME:runtrack}
+    password: ${DB_PASSWORD:password}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+
+logging:
+  level:
+    com.sponovation.runtrack: INFO
+    org.springframework.web: WARN
+    org.hibernate.SQL: WARN
+  file:
+    name: /var/log/runtrack/app.log
+
+app:
+  notification:
+    enabled: true

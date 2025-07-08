@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Test" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>Test Route</name>
+    <desc>Simple test route for Redis testing</desc>
+  </metadata>
+  <trk>
+    <name>Test Route</name>
+    <desc>Test track for course data</desc>
+    <trkseg>
+      <trkpt lat="37.5665" lon="126.9780">
+        <ele>50</ele>
+      </trkpt>
+      <trkpt lat="37.5675" lon="126.9790">
+        <ele>55</ele>
+      </trkpt>
+      <trkpt lat="37.5685" lon="126.9800">
+        <ele>60</ele>
+      </trkpt>
+      <trkpt lat="37.5695" lon="126.9810">
+        <ele>65</ele>
+      </trkpt>
+      <trkpt lat="37.5705" lon="126.9820">
+        <ele>70</ele>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>
