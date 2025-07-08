@@ -182,7 +182,7 @@ java -jar build/libs/runtrack-0.0.1-SNAPSHOT.jar
 
 - **Framework**: Spring Boot 3.5.0
 - **Language**: Kotlin 1.9.25
-- **Database**: H2 (개발) / MySQL (운영)
+- **Database**: H2 (개발) / MySQL (운영) / Redis (개발 / 운영)
 - **ORM**: Spring Data JPA + Hibernate
 - **Documentation**: SpringDoc OpenAPI (Swagger)
 - **Build Tool**: Gradle
