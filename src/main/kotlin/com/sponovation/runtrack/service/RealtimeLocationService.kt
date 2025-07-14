@@ -123,7 +123,9 @@ class RealtimeLocationService(
             )
             
             // Redis 키 생성: "location:event:{eventDetailId}:participant:{userId}"
-            val locationKey = "$LOCATION_KEY_PREFIX$eventDetailId:$PARTICIPANT_KEY_PREFIX$userId"
+            val redisEventDetailId = eventDetailId.toString()
+            val redisUserId = userId.toString()
+            val locationKey = "$LOCATION_KEY_PREFIX$redisEventDetailId:$PARTICIPANT_KEY_PREFIX$redisUserId"
             
             // 객체를 JSON 문자열로 직렬화
             val jsonData = objectMapper.writeValueAsString(locationData)
@@ -163,7 +165,8 @@ class RealtimeLocationService(
             logger.info("참가자 위치 조회 시작: eventDetailId=$eventDetailId, zoomLevel=$zoomLevel")
             
             // 해당 대회의 모든 참가자 키 패턴 생성
-            val pattern = "$LOCATION_KEY_PREFIX$eventDetailId:$PARTICIPANT_KEY_PREFIX*"
+            val redisEventDetailId = eventDetailId.toString()
+            val pattern = "$LOCATION_KEY_PREFIX$redisEventDetailId:$PARTICIPANT_KEY_PREFIX*"
             
             // Redis에서 패턴에 매칭되는 모든 키 조회
             val keys = redisTemplate.keys(pattern)
@@ -331,7 +334,8 @@ class RealtimeLocationService(
     private fun updateRanking(eventDetailId: Long, userId: Long, distanceFromStart: Double, elapsedTimeSeconds: Long) {
         try {
             // 순위 정보를 저장할 Redis Sorted Set 키
-            val rankingKey = "$RANKING_KEY_PREFIX$eventDetailId"
+            val redisEventDetailId = eventDetailId.toString()
+            val rankingKey = "$RANKING_KEY_PREFIX$redisEventDetailId"
             
             // Sorted Set에 사용자 추가/업데이트
             // Score가 높을수록 상위 순위 (거리가 멀수록 앞순위)
@@ -364,7 +368,8 @@ class RealtimeLocationService(
      */
     private fun getTop3Ranking(eventDetailId: Long): List<RankingDto> {
         return try {
-            val rankingKey = "$RANKING_KEY_PREFIX$eventDetailId"
+            val redisEventDetailId = eventDetailId.toString()
+            val rankingKey = "$RANKING_KEY_PREFIX$redisEventDetailId"
             
             // Sorted Set에서 점수 내림차순으로 상위 3명 조회
             // reverseRange: 높은 점수부터 조회 (더 멀리 간 순서)
@@ -374,7 +379,8 @@ class RealtimeLocationService(
             
             // 각 상위 사용자에 대해 상세 정보 생성
             top3UserIds?.forEachIndexed { index, userIdStr ->
-                val userId = userIdStr.toString().toLongOrNull()
+                val userId = userIdStr.toString()
+                val eventDetailId = eventDetailId.toString()
                 if (userId != null) {
                     // 해당 사용자의 위치 캐시에서 추가 정보 조회
                     val locationKey = "$LOCATION_KEY_PREFIX$eventDetailId:$PARTICIPANT_KEY_PREFIX$userId"
@@ -386,7 +392,7 @@ class RealtimeLocationService(
                         rankings.add(
                             RankingDto(
                                 rank = index + 1,  // 1위, 2위, 3위
-                                userId = userId,
+                                userId = userId.toLong(),
                                 nickname = locationData.nickname,
                                 bibNumber = "A${userId.toString().padStart(3, '0')}", // TODO: 실제 배번 시스템 연동 필요
                                 elapsedTime = formatElapsedTime(locationData.elapsedTimeSeconds)

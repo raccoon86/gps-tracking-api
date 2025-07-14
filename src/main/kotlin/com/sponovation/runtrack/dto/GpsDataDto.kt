@@ -2,6 +2,9 @@ package com.sponovation.runtrack.dto
 
 import jakarta.validation.constraints.NotNull
 import java.time.LocalDateTime
+import jakarta.validation.constraints.DecimalMin
+import jakarta.validation.constraints.DecimalMax
+import jakarta.validation.constraints.Min
 
 /**
  * GPS 데이터 전송 DTO
@@ -17,21 +20,15 @@ import java.time.LocalDateTime
  * @see GpsDataResponse GPS 데이터 처리 결과 응답
  */
 data class GpsDataDto(
-    /** 
-     * 위도 (Latitude)
-     * WGS84 좌표계 기준, -90.0 ~ +90.0 범위
-     * 필수 값: GPS 위치의 핵심 정보
-     */
-    @field:NotNull
-    val latitude: Double,
+    @field:NotNull(message = "latitude는 필수입니다.")
+    @field:DecimalMin(value = "-90.0", message = "latitude는 -90 이상이어야 합니다.")
+    @field:DecimalMax(value = "90.0", message = "latitude는 90 이하여야 합니다.")
+    val latitude: Double?,
 
-    /** 
-     * 경도 (Longitude)
-     * WGS84 좌표계 기준, -180.0 ~ +180.0 범위
-     * 필수 값: GPS 위치의 핵심 정보
-     */
-    @field:NotNull
-    val longitude: Double,
+    @field:NotNull(message = "longitude는 필수입니다.")
+    @field:DecimalMin(value = "-180.0", message = "longitude는 -180 이상이어야 합니다.")
+    @field:DecimalMax(value = "180.0", message = "longitude는 180 이하여야 합니다.")
+    val longitude: Double?,
 
     /** 
      * 고도 (Altitude)
@@ -40,6 +37,10 @@ data class GpsDataDto(
      */
     @field:NotNull
     val altitude: Double,
+
+    @field:NotNull(message = "timestamp는 필수입니다.")
+    @field:Min(value = 0, message = "timestamp는 0 이상이어야 합니다.")
+    val timestamp: Long?,
 
     /** 
      * GPS 신호 정확도 (미터 단위)
@@ -51,16 +52,18 @@ data class GpsDataDto(
      * - 5-10m: 보통 정확도 (일반 야외)
      * - 10m 이상: 낮은 정확도 (실내, 터널)
      */
-    @field:NotNull
-    val accuracy: Float,
+    @field:NotNull(message = "accuracy는 필수입니다.")
+    @field:DecimalMin(value = "0.0", message = "accuracy는 0 이상이어야 합니다.")
+    val accuracy: Double?,
 
     /** 
      * 이동 속도 (m/s 단위)
      * GPS에서 계산된 순간 이동 속도
      * 필수 값: 운동 강도 측정 및 페이스 계산에 활용
      */
-    @field:NotNull
-    val speed: Float,
+    @field:NotNull(message = "speed는 필수입니다.")
+    @field:DecimalMin(value = "0.0", message = "speed는 0 이상이어야 합니다.")
+    val speed: Double?,
 
     /** 
      * 이동 방향 (방위각, 0-360도)
@@ -69,14 +72,6 @@ data class GpsDataDto(
      */
     @field:NotNull
     val bearing: Float,
-
-    /** 
-     * GPS 데이터 수신 시간
-     * 클라이언트에서 GPS 신호를 수신한 정확한 시간
-     * 필수 값: 시간 순서 보장 및 동기화
-     */
-    @field:NotNull
-    val timestamp: LocalDateTime,
 
     /** 
      * 추적 세션 ID

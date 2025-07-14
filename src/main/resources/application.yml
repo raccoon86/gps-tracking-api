@@ -151,8 +151,8 @@ spring:
     activate:
       on-profile: prod
   datasource:
-    url: jdbc:mysql://localhost:3306/runtrack
-    username: ${DB_USERNAME:runtrack}
+    url: jdbc:mysql://localhost:3306/mypb-venue
+    username: ${DB_USERNAME:mypb-venue}
     password: ${DB_PASSWORD:password}
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
@@ -169,7 +169,7 @@ logging:
     org.springframework.web: WARN
     org.hibernate.SQL: WARN
   file:
-    name: /var/log/runtrack/app.log
+    name: /var/log/mypb-venue/app.log
 
 app:
   notification:

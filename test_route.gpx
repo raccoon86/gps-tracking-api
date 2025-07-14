@@ -1,27 +1,63 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="Test" xmlns="http://www.topografix.com/GPX/1/1">
+<?xml version="1.0" encoding="utf-8"?>
+<gpx xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="1.1" creator="ROUTEEDITOR1" xmlns="http://www.topografix.com/GPX/1/1">
   <metadata>
-    <name>Test Route</name>
-    <desc>Simple test route for Redis testing</desc>
+    <desc>Created/Modified by using GPS Route Editor.</desc>
+    <link href="http://www.gpsnote.net">
+      <text>GpsNote.NET</text>
+    </link>
   </metadata>
   <trk>
-    <name>Test Route</name>
-    <desc>Test track for course data</desc>
     <trkseg>
-      <trkpt lat="37.5665" lon="126.9780">
-        <ele>50</ele>
+      <trkpt lat="37.5413553485092" lon="127.115719020367">
+        <ele>-1</ele>
       </trkpt>
-      <trkpt lat="37.5675" lon="126.9790">
-        <ele>55</ele>
+      <trkpt lat="37.5390881874808" lon="127.114029228687">
+        <ele>-1</ele>
       </trkpt>
-      <trkpt lat="37.5685" lon="126.9800">
-        <ele>60</ele>
+      <trkpt lat="37.5379482005428" lon="127.113452553749">
+        <ele>-1</ele>
       </trkpt>
-      <trkpt lat="37.5695" lon="126.9810">
-        <ele>65</ele>
+      <trkpt lat="37.5353682776934" lon="127.11048334837">
+        <ele>-1</ele>
       </trkpt>
-      <trkpt lat="37.5705" lon="126.9820">
-        <ele>70</ele>
+      <trkpt lat="37.5351258071487" lon="127.110266089439">
+        <ele>-1</ele>
+      </trkpt>
+      <trkpt lat="37.5344154064531" lon="127.109783291817">
+        <ele>-1</ele>
+      </trkpt>
+      <trkpt lat="37.5337836971563" lon="127.109482884407">
+        <ele>-1</ele>
+      </trkpt>
+      <trkpt lat="37.5320799696497" lon="127.108764052391">
+        <ele>-1</ele>
+      </trkpt>
+      <trkpt lat="37.5317162475003" lon="127.108696997166">
+        <ele>-1</ele>
+      </trkpt>
+      <trkpt lat="37.5315503385624" lon="127.108699679375">
+        <ele>-1</ele>
+      </trkpt>
+      <trkpt lat="37.5301273352067" lon="127.107908427715">
+        <ele>-1</ele>
+      </trkpt>
+      <trkpt lat="37.5301188268838" lon="127.107884287834">
+        <ele>-1</ele>
+      </trkpt>
+      <trkpt lat="37.5266260783458" lon="127.1042740345">
+        <ele>-1</ele>
+      </trkpt>
+      <trkpt lat="37.5258773070672" lon="127.104005813599">
+        <ele>-1</ele>
+      </trkpt>
+      <trkpt lat="37.5255709893779" lon="127.103651762009">
+        <ele>-1</ele>
+      </trkpt>
+      <trkpt lat="37.5252731793075" lon="127.102814912796">
+        <ele>-1</ele>
+      </trkpt>
+      <trkpt lat="37.5235713846696" lon="127.101398706436">
+        <ele>-1</ele>
       </trkpt>
     </trkseg>
   </trk>

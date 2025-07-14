@@ -1,48 +1,30 @@
 package com.sponovation.runtrack.algorithm
 
-import com.sponovation.runtrack.domain.GpxWaypoint
+// import com.sponovation.runtrack.domain.GpxWaypoint - 삭제됨
 import com.sponovation.runtrack.service.InterpolatedPoint
 import com.sponovation.runtrack.util.GeoUtils
 
 /**
  * GPS 좌표를 GPX 경로에 매칭하는 맵 매처
  * 
- * 이 클래스는 실제 GPS 위치를 미리 정의된 경로(GPX 파일)의 가장 적절한 지점으로 매칭하는 기능을 제공합니다.
- * GPS 신호의 부정확성으로 인해 발생하는 위치 오차를 보정하여, 사용자가 실제로 경로상의 어느 지점에 있는지 
- * 정확하게 추정할 수 있도록 합니다.
- * 
- * 주요 기능:
- * - GPS 좌표를 경로의 가장 가까운 세그먼트에 투영
- * - 거리와 방향을 고려한 종합적인 매칭 점수 계산
- * - 경로상의 진행률 계산
- * 
- * 매칭 알고리즘:
- * 1. 각 경로 세그먼트에 대해 GPS 좌표를 투영
- * 2. 거리 기반 점수와 방향 기반 점수를 가중평균으로 계산
- * 3. 가장 낮은 점수(최적 매칭)를 가진 세그먼트 선택
- * 4. 임계값 내에 있을 경우 매칭 성공으로 판정
+ * 현재 GpxWaypoint 엔티티가 삭제되어 일부 기능이 제한됩니다.
+ * 보간된 경로 포인트를 사용한 매칭만 지원합니다.
  */
 class MapMatcher {
 
     companion object {
         /**
          * 매칭 성공으로 판단하는 최대 거리 임계값 (미터)
-         * 이 거리보다 멀리 떨어진 경우 매칭 실패로 간주합니다.
-         * 100미터는 일반적인 GPS 오차 범위와 도로폭을 고려한 적절한 값입니다.
          */
         private const val MAX_DISTANCE_THRESHOLD = 100.0 // meters
         
         /**
          * 매칭 점수 계산 시 거리의 가중치
-         * 전체 점수에서 거리가 차지하는 비중을 나타냅니다.
-         * 거리가 방향보다 더 중요한 요소로 간주되어 0.6(60%)의 가중치를 가집니다.
          */
         private const val WEIGHT_DISTANCE = 0.6
         
         /**
          * 매칭 점수 계산 시 방향(베어링)의 가중치
-         * 전체 점수에서 방향이 차지하는 비중을 나타냅니다.
-         * 거리보다는 덜 중요하지만 여전히 고려해야 할 요소로 0.4(40%)의 가중치를 가집니다.
          */
         private const val WEIGHT_BEARING = 0.4
     }
@@ -50,97 +32,21 @@ class MapMatcher {
     /**
      * GPS 좌표를 GPX 경로의 가장 가까운 세그먼트에 매칭하는 주요 함수
      * 
-     * 이 함수는 현재 GPS 위치와 이동 방향을 분석하여, 미리 정의된 경로상의 
-     * 가장 적절한 지점을 찾아 매칭 결과를 반환합니다.
+     * 현재 GpxWaypoint 엔티티가 삭제되어 비활성화됨
      * 
-     * 처리 과정:
-     * 1. 입력 검증: 최소 2개 이상의 웨이포인트가 필요
-     * 2. 각 경로 세그먼트에 대해 매칭 후보 생성
-     * 3. 거리와 방향을 고려한 종합 점수 계산
-     * 4. 최적 매칭 선택 및 결과 반환
-     * 
-     * @param gpsLat GPS에서 제공하는 현재 위도 (WGS84 좌표계)
-     * @param gpsLon GPS에서 제공하는 현재 경도 (WGS84 좌표계)
-     * @param bearing 현재 이동 방향 (북쪽 기준 시계방향 각도, 0-360도)
-     * @param waypoints 경로를 구성하는 웨이포인트 리스트 (순서대로 정렬되어야 함)
+     * @param gpsLat GPS에서 제공하는 현재 위도
+     * @param gpsLon GPS에서 제공하는 현재 경도
+     * @param bearing 현재 이동 방향
+     * @param waypoints 경로를 구성하는 웨이포인트 리스트 (현재 사용 안함)
      * @return 매칭 결과를 포함하는 MatchResult 객체
      */
     fun matchToRoute(
         gpsLat: Double,
         gpsLon: Double,
         bearing: Double,
-        waypoints: List<GpxWaypoint>
+        waypoints: List<Any>
     ): MatchResult {
-        // 경로 세그먼트를 구성하기 위해서는 최소 2개의 점이 필요
-        // 점이 하나뿐이면 선분을 만들 수 없어 매칭 불가능
-        if (waypoints.size < 2) {
-            return MatchResult(
-                matched = false, // 매칭 실패
-                distanceToRoute = Double.MAX_VALUE, // 거리 측정 불가능
-                matchedLatitude = gpsLat, // 원본 GPS 좌표 유지
-                matchedLongitude = gpsLon,
-                routeProgress = 0.0 // 진행률 0%
-            )
-        }
-
-        // 최적 매칭을 찾기 위한 변수들 초기화
-        var bestMatch: RouteMatch? = null // 현재까지 발견된 최적 매칭
-        var minScore = Double.MAX_VALUE // 최소 점수 (점수가 낮을수록 더 좋은 매칭)
-
-        // 모든 경로 세그먼트에 대해 매칭 후보를 생성하고 평가
-        // 세그먼트는 연속된 두 웨이포인트 사이의 직선 구간을 의미
-        for (segmentIndex in 0 until waypoints.size - 1) {
-            val startPoint = waypoints[segmentIndex] // 현재 세그먼트의 시작점
-            val endPoint = waypoints[segmentIndex + 1] // 현재 세그먼트의 끝점
-
-            // 현재 세그먼트에서 GPS 좌표에 대한 최적 매칭점 탐색
-            val matchCandidate = findBestMatchOnSegment(
-                gpsLat,
-                gpsLon,
-                bearing,
-                startPoint.latitude,
-                startPoint.longitude,
-                endPoint.latitude,
-                endPoint.longitude
-            )
-
-            // 매칭 후보의 품질을 나타내는 종합 점수 계산
-            // 점수가 낮을수록 더 좋은 매칭을 의미
-            val matchScore = calculateMatchScore(matchCandidate, bearing)
-
-            // 현재까지의 최적 매칭보다 더 좋은 점수인 경우 업데이트
-            if (matchScore < minScore) {
-                minScore = matchScore
-                bestMatch = RouteMatch(
-                    matchCandidate,
-                    segmentIndex, // 매칭된 세그먼트의 인덱스
-                    startPoint.distanceFromStart + matchCandidate.distanceAlongSegment // 전체 경로에서의 누적 거리
-                )
-            }
-        }
-
-        // 최적 매칭이 발견된 경우 최종 결과 생성
-        bestMatch?.let { match ->
-            // 거리 임계값을 기준으로 매칭 성공 여부 판정
-            val isMatched = match.candidate.distanceToSegment <= MAX_DISTANCE_THRESHOLD
-            
-            // 전체 경로 길이 계산 (마지막 웨이포인트의 누적 거리)
-            val totalDistance = waypoints.lastOrNull()?.distanceFromStart ?: 0.0
-            
-            // 전체 경로에서의 진행률 계산 (0.0 ~ 1.0 범위)
-            val routeProgress = if (totalDistance > 0) match.progressDistance / totalDistance else 0.0
-
-            return MatchResult(
-                matched = isMatched,
-                distanceToRoute = match.candidate.distanceToSegment,
-                // 매칭 성공 시 보정된 좌표, 실패 시 원본 GPS 좌표 사용
-                matchedLatitude = if (isMatched) match.candidate.projectedLat else gpsLat,
-                matchedLongitude = if (isMatched) match.candidate.projectedLon else gpsLon,
-                routeProgress = routeProgress
-            )
-        }
-
-        // 매칭할 수 있는 세그먼트가 없는 경우 기본 결과 반환
+        // GpxWaypoint 엔티티가 삭제되어 기본 GPS 위치 반환
         return MatchResult(
             matched = false,
             distanceToRoute = Double.MAX_VALUE,
@@ -222,13 +128,38 @@ class MapMatcher {
             // 전체 경로에서의 진행률 계산 (0.0 ~ 1.0 범위)
             val routeProgress = if (totalDistance > 0) match.progressDistance / totalDistance else 0.0
 
+            // 매칭된 세그먼트의 경로 방향 계산
+            val startPoint = interpolatedPoints[match.segmentIndex]
+            val endPoint = interpolatedPoints[match.segmentIndex + 1]
+            val segmentBearing = GeoUtils.calculateBearing(
+                startPoint.latitude, startPoint.longitude,
+                endPoint.latitude, endPoint.longitude
+            )
+            
+            // 가장 가까운 GPX 포인트 정보 생성
+            val nearestGpxPoint = NearestGpxPointInfo(
+                latitude = match.candidate.projectedLat,
+                longitude = match.candidate.projectedLon,
+                elevation = null, // 보간 포인트에서는 고도 정보 없음
+                distanceToPoint = match.candidate.distanceToSegment,
+                distanceFromStart = match.progressDistance,
+                routeBearing = segmentBearing
+            )
+
             return MatchResult(
                 matched = isMatched,
                 distanceToRoute = match.candidate.distanceToSegment,
                 // 매칭 성공 시 보정된 좌표, 실패 시 원본 GPS 좌표 사용
                 matchedLatitude = if (isMatched) match.candidate.projectedLat else gpsLat,
                 matchedLongitude = if (isMatched) match.candidate.projectedLon else gpsLon,
-                routeProgress = routeProgress
+                routeProgress = routeProgress,
+                matchScore = minScore,
+                currentBearing = bearing,
+                routeBearing = segmentBearing,
+                bearingDifference = match.candidate.bearingDifference,
+                segmentIndex = match.segmentIndex,
+                distanceFromStart = match.progressDistance,
+                nearestGpxPoint = nearestGpxPoint
             )
         }
 
@@ -558,5 +489,38 @@ data class MatchResult(
     val distanceToRoute: Double, // 원본 GPS 위치에서 가장 가까운 경로 지점까지의 거리 (미터)
     val matchedLatitude: Double, // 최종 매칭된 위도 (보정된 좌표 또는 원본 좌표)
     val matchedLongitude: Double, // 최종 매칭된 경도 (보정된 좌표 또는 원본 좌표)
-    val routeProgress: Double // 전체 경로에서의 진행률 (0.0 = 시작, 1.0 = 완료)
+    val routeProgress: Double, // 전체 경로에서의 진행률 (0.0 = 시작, 1.0 = 완료)
+    
+    /** 매칭 품질 점수 (0에 가까울수록 좋음) */
+    val matchScore: Double = Double.MAX_VALUE,
+    
+    /** 현재 이동 방향 (북쪽 기준 시계방향, 0-360도) */
+    val currentBearing: Double? = null,
+    
+    /** 경로 방향 (북쪽 기준 시계방향, 0-360도) */
+    val routeBearing: Double? = null,
+    
+    /** 이동 방향과 경로 방향의 차이 (도) */
+    val bearingDifference: Double? = null,
+    
+    /** 매칭된 세그먼트 인덱스 */
+    val segmentIndex: Int? = null,
+    
+    /** 시작점으로부터의 거리 (미터) */
+    val distanceFromStart: Double = 0.0,
+    
+    /** 가장 가까운 GPX 포인트 정보 */
+    val nearestGpxPoint: NearestGpxPointInfo? = null
+)
+
+/**
+ * 가장 가까운 GPX 포인트 정보
+ */
+data class NearestGpxPointInfo(
+    val latitude: Double,
+    val longitude: Double,
+    val elevation: Double? = null,
+    val distanceToPoint: Double,
+    val distanceFromStart: Double,
+    val routeBearing: Double? = null
 ) 

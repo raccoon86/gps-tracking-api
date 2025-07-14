@@ -260,3 +260,75 @@ data class ParticipantLocationCache(
      */
     val elapsedTimeSeconds: Long = 0
 ) 
+
+/**
+ * 실시간 위치 정보 DTO
+ * 
+ * Redis Hash에 저장되는 실시간 위치 정보의 완전한 데이터 구조입니다.
+ * RealtimeLocationHashService에서 사용되며, 참가자의 실시간 위치 추적에 필요한 
+ * 모든 정보를 포함합니다.
+ * 
+ * 주요 기능:
+ * - 원본 GPS 데이터와 보정된 위치 정보 분리 저장
+ * - 누적 거리 및 시간 계산 정보 포함
+ * - 체크포인트 도달 여부 추적
+ * - Redis Hash 저장/조회 최적화
+ */
+data class RealtimeLocationDto(
+    /** 사용자 ID */
+    val userId: String,
+    
+    /** 이벤트 ID */
+    val eventId: String,
+    
+    /** 이벤트 상세 ID */
+    val eventDetailId: String,
+    
+    /** 원본 GPS 위도 */
+    val rawLatitude: Double,
+    
+    /** 원본 GPS 경도 */
+    val rawLongitude: Double,
+    
+    /** 원본 GPS 고도 (선택적) */
+    val rawAltitude: Double? = null,
+    
+    /** 원본 GPS 정확도 (선택적) */
+    val rawAccuracy: Double? = null,
+    
+    /** 원본 GPS 시간 (Unix 타임스탬프) */
+    val rawTime: Long,
+    
+    /** 원본 GPS 속도 (선택적) */
+    val rawSpeed: Double? = null,
+    
+    /** 보정된 위도 */
+    val correctedLatitude: Double,
+    
+    /** 보정된 경도 */
+    val correctedLongitude: Double,
+    
+    /** 보정된 고도 (선택적) */
+    val correctedAltitude: Double? = null,
+    
+    /** 마지막 업데이트 시간 (Unix 타임스탬프) */
+    val lastUpdated: Long,
+    
+    /** 이동 방향 (선택적) */
+    val heading: Double? = null,
+    
+    /** 누적 이동 거리 (미터) */
+    val distanceCovered: Double? = null,
+    
+    /** 누적 시간 (초) */
+    val cumulativeTime: Long? = null,
+    
+    /** 가장 멀리 도달한 체크포인트 ID */
+    val farthestCpId: String? = null,
+    
+    /** 가장 멀리 도달한 체크포인트 인덱스 */
+    val farthestCpIndex: Int? = null,
+    
+    /** 가장 멀리 도달한 체크포인트에서의 누적 시간 */
+    val cumulativeTimeAtFarthestCp: Long? = null
+) 

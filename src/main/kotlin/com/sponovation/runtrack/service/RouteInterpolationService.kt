@@ -19,6 +19,15 @@ class RouteInterpolationService {
      * GPX 웨이포인트를 100미터 간격으로 보간합니다.
      */
     fun interpolateRoute(waypoints: List<ParsedGpxWaypoint>): List<InterpolatedPoint> {
+        // 입력값 유효성 검증
+        require(waypoints.isNotEmpty()) { "입력 웨이포인트가 비어있습니다." }
+        require(waypoints.size >= 2) { "보간을 위해서는 최소 2개 이상의 웨이포인트가 필요합니다." }
+        waypoints.forEachIndexed { idx, pt ->
+            require(pt.latitude in -90.0..90.0) { "[$idx] latitude 범위 오류: ${pt.latitude}" }
+            require(pt.longitude in -180.0..180.0) { "[$idx] longitude 범위 오류: ${pt.longitude}" }
+            require(!pt.elevation.isNaN()) { "[$idx] elevation 값이 NaN입니다." }
+        }
+
         if (waypoints.size < 2) {
             logger.warn("보간할 웨이포인트가 부족합니다: ${waypoints.size}개")
             return waypoints.map { 

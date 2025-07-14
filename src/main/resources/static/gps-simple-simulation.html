@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>심플 GPS 시뮬레이션</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <style>
+      body {
+        font-family: "Noto Sans KR", sans-serif;
+        background: #f4f6fa;
+        margin: 0;
+        padding: 0;
+      }
+      #map {
+        height: 500px;
+        border-radius: 10px;
+        margin: 20px auto 0 auto;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+        max-width: 900px;
+      }
+      .log-area {
+        max-width: 900px;
+        margin: 30px auto;
+        background: #222;
+        color: #fff;
+        font-size: 1.25em;
+        border-radius: 10px;
+        padding: 24px 18px;
+        min-height: 200px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+        font-family: "Fira Mono", monospace;
+        overflow-y: auto;
+        line-height: 1.7;
+      }
+      .btn {
+        display: inline-block;
+        margin: 20px 10px 0 10px;
+        padding: 12px 32px;
+        font-size: 1.1em;
+        border: none;
+        border-radius: 6px;
+        background: #2563eb;
+        color: #fff;
+        cursor: pointer;
+        font-weight: bold;
+        transition: background 0.2s;
+      }
+      .btn:active {
+        background: #1e40af;
+      }
+      .btn.stop {
+        background: #dc2626;
+      }
+      .btn.stop:active {
+        background: #991b1b;
+      }
+    </style>
+  </head>
+  <body>
+    <div style="text-align: center">
+      <button id="startBtn" class="btn">시작</button>
+      <button id="stopBtn" class="btn stop">중지</button>
+    </div>
+    <div id="map"></div>
+    <div id="logArea" class="log-area"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+      // 1. 유저 및 GPX 경로 상수
+      const USERS = [
+        { userId: 1, name: "김러너", color: "#ff4444" },
+        { userId: 2, name: "이스피드", color: "#44ff44" },
+        { userId: 3, name: "박마라톤", color: "#4444ff" },
+        { userId: 4, name: "최러닝", color: "#ffaa44" },
+        { userId: 5, name: "정트랙", color: "#aa44ff" },
+      ];
+      const GPX_POINTS = [
+        [37.5413553485092, 127.115719020367],
+        [37.5390881874808, 127.114029228687],
+        [37.5379482005428, 127.113452553749],
+        [37.5353682776934, 127.11048334837],
+        [37.5351258071487, 127.110266089439],
+        [37.5344154064531, 127.109783291817],
+        [37.5337836971563, 127.109482884407],
+        [37.5320799696497, 127.108764052391],
+        [37.5317162475003, 127.108696997166],
+        [37.5315503385624, 127.108699679375],
+        [37.5301273352067, 127.107908427715],
+        [37.5301188268838, 127.107884287834],
+        [37.5266260783458, 127.1042740345],
+        [37.5258773070672, 127.104005813599],
+        [37.5255709893779, 127.103651762009],
+        [37.5252731793075, 127.102814912796],
+        [37.5235713846696, 127.101398706436],
+      ];
+      const EVENT_ID = 1;
+      const EVENT_DETAIL_ID = 100;
+      const API_URL = "/api/v1/gpx/correct-location";
+      const GPS_ERROR_METERS = 5;
+      const INTERVAL_SECONDS = 10;
+
+      // 2. 지도 초기화
+      let map,
+        userMarkers = {};
+      function initMap() {
+        map = L.map("map").setView(GPX_POINTS[0], 14);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "© OpenStreetMap contributors",
+        }).addTo(map);
+        L.polyline(GPX_POINTS, {
+          color: "#2563eb",
+          weight: 5,
+          opacity: 0.8,
+        }).addTo(map);
+        L.marker(GPX_POINTS[0]).addTo(map).bindPopup("🏁 시작점").openPopup();
+        L.marker(GPX_POINTS[GPX_POINTS.length - 1])
+          .addTo(map)
+          .bindPopup("🏁 도착점");
+        map.fitBounds(L.polyline(GPX_POINTS).getBounds(), {
+          padding: [20, 20],
+        });
+      }
+
+      // Haversine 거리 계산 함수 (미터)
+      function getDistance(lat1, lng1, lat2, lng2) {
+        const R = 6371000;
+        const toRad = (deg) => (deg * Math.PI) / 180;
+        const dLat = toRad(lat2 - lat1);
+        const dLng = toRad(lng2 - lng1);
+        const a =
+          Math.sin(dLat / 2) ** 2 +
+          Math.cos(toRad(lat1)) *
+            Math.cos(toRad(lat2)) *
+            Math.sin(dLng / 2) ** 2;
+        return 2 * R * Math.asin(Math.sqrt(a));
+      }
+
+      // 3. GPS 데이터 생성 (10초 간격, 10m 오차, 유저별 속도/패턴)
+      function generateUserGpsArrays() {
+        // 유저별 속도(2.7~3.4 m/s) 랜덤 부여
+        const userSpeeds = USERS.map(() => 2.7 + Math.random() * 0.7);
+        return USERS.map((user, idx) => {
+          let gpsArray = [];
+          let totalTime = 0;
+          for (let i = 0; i < GPX_POINTS.length - 1; i++) {
+            const [lat1, lng1] = GPX_POINTS[i];
+            const [lat2, lng2] = GPX_POINTS[i + 1];
+            const dist = getDistance(lat1, lng1, lat2, lng2); // 미터
+            let speed = userSpeeds[idx] + (Math.random() - 0.5) * 0.2; // 구간별 약간 랜덤
+            let t = 0;
+            while (t < dist) {
+              const ratio = t / dist;
+              const lat = lat1 + (lat2 - lat1) * ratio;
+              const lng = lng1 + (lng2 - lng1) * ratio;
+              // 10m 오차 적용
+              const latErr =
+                ((Math.random() - 0.5) * 2 * GPS_ERROR_METERS) / 111000;
+              const lngErr =
+                ((Math.random() - 0.5) * 2 * GPS_ERROR_METERS) /
+                (111000 * Math.cos((lat * Math.PI) / 180));
+              gpsArray.push({
+                lat: lat + latErr,
+                lng: lng + lngErr,
+                altitude: 10.0,
+                accuracy: 5.0,
+                speed: speed,
+                bearing: 180.0,
+                timestamp: new Date(
+                  Date.now() + totalTime * 1000
+                ).toISOString(),
+              });
+              t += speed * INTERVAL_SECONDS;
+              totalTime += INTERVAL_SECONDS;
+            }
+          }
+          // 마지막 포인트 추가
+          const [lat2, lng2] = GPX_POINTS[GPX_POINTS.length - 1];
+          gpsArray.push({
+            lat: lat2,
+            lng: lng2,
+            altitude: 10.0,
+            accuracy: 5.0,
+            speed: userSpeeds[idx],
+            bearing: 180.0,
+            timestamp: new Date(Date.now() + totalTime * 1000).toISOString(),
+          });
+          return { ...user, gpsArray, currentIdx: 0 };
+        });
+      }
+
+      // 4. 10초마다 각 유저의 다음 포인트를 correct-location에 POST
+      let simulationInterval = null;
+      let userSimStates = [];
+      function startSimulation() {
+        if (simulationInterval) {
+          log("⚠️ 이미 실행 중입니다.");
+          return;
+        }
+        userSimStates = generateUserGpsArrays();
+        // 마커 초기화
+        userMarkers = {};
+        userSimStates.forEach((user) => {
+          const pt = user.gpsArray[0];
+          const marker = L.circleMarker([pt.lat, pt.lng], {
+            color: user.color,
+            fillColor: user.color,
+            fillOpacity: 0.9,
+            radius: 10,
+          })
+            .addTo(map)
+            .bindPopup(`${user.name}`);
+          userMarkers[user.userId] = marker;
+        });
+        log("🚀 시뮬레이션 시작");
+        simulationInterval = setInterval(
+          sendNextGpsPoints,
+          INTERVAL_SECONDS * 1000
+        );
+        sendNextGpsPoints(); // 즉시 1회 실행
+      }
+      function stopSimulation() {
+        if (simulationInterval) {
+          clearInterval(simulationInterval);
+          simulationInterval = null;
+          log("⏹️ 시뮬레이션 중지");
+        }
+      }
+      async function sendNextGpsPoints() {
+        for (const user of userSimStates) {
+          if (user.currentIdx >= user.gpsArray.length) continue;
+          const gpsPoint = user.gpsArray[user.currentIdx];
+          // 마커 이동
+          if (userMarkers[user.userId]) {
+            userMarkers[user.userId].setLatLng([gpsPoint.lat, gpsPoint.lng]);
+          }
+          // correct-location POST
+          const reqBody = {
+            userId: user.userId,
+            eventId: EVENT_ID,
+            eventDetailId: EVENT_DETAIL_ID,
+            gpsData: [gpsPoint],
+          };
+          log(
+            `📤 <b>${user.name}</b> 요청:<br><pre>${JSON.stringify(
+              reqBody,
+              null,
+              2
+            )}</pre>`
+          );
+          try {
+            const res = await fetch(API_URL, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(reqBody),
+            });
+            const resText = await res.text();
+            log(
+              `📥 <b>${user.name}</b> 응답: <b>${res.status} ${res.statusText}</b><br><pre>${resText}</pre>`
+            );
+          } catch (e) {
+            log(`❌ <b>${user.name}</b> 전송 오류: ${e.message}`);
+          }
+          user.currentIdx++;
+        }
+      }
+
+      // 5. 로그 함수 (크게, 최근이 맨 위)
+      function log(msg) {
+        const logArea = document.getElementById("logArea");
+        const time = new Date().toLocaleTimeString();
+        const entry = `<div style="margin-bottom:18px;"><span style="font-weight:bold;color:#60a5fa;">[${time}]</span> ${msg}</div>`;
+        logArea.innerHTML = entry + logArea.innerHTML;
+      }
+
+      // 6. 버튼 이벤트
+      document.getElementById("startBtn").onclick = startSimulation;
+      document.getElementById("stopBtn").onclick = stopSimulation;
+
+      // 7. 초기화
+      window.onload = initMap;
+    </script>
+  </body>
+</html>
