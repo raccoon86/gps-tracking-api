@@ -1,14 +1,9 @@
 package com.sponovation.runtrack.controller
 
-import com.sponovation.runtrack.dto.EventDetailErrorResponseDto
-import com.sponovation.runtrack.dto.EventDetailResponseDto
 import com.sponovation.runtrack.dto.EventDetailRequestDto
 import com.sponovation.runtrack.service.EventDetailService
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.Parameter
-import io.swagger.v3.oas.annotations.media.Content
-import io.swagger.v3.oas.annotations.media.Schema
-import io.swagger.v3.oas.annotations.responses.ApiResponses
 import io.swagger.v3.oas.annotations.tags.Tag
 import jakarta.validation.constraints.NotNull
 import jakarta.validation.constraints.Positive
@@ -17,14 +12,11 @@ import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.validation.annotation.Validated
 import org.springframework.web.bind.annotation.*
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
 import com.sponovation.runtrack.repository.EventRepository
-import com.sponovation.runtrack.repository.CourseRepository
+import com.sponovation.runtrack.repository.EventDetailRepository
 import com.sponovation.runtrack.enums.ErrorCode
 import com.sponovation.runtrack.common.ApiResponse
 import com.sponovation.runtrack.common.ErrorResponse
-import com.sponovation.runtrack.dto.ErrorResponseDto
 
 /**
  * 대회 상세 조회 API 컨트롤러
@@ -45,7 +37,7 @@ import com.sponovation.runtrack.dto.ErrorResponseDto
 class EventDetailController(
     private val eventDetailService: EventDetailService,
     private val eventRepository: EventRepository,
-    private val courseRepository: CourseRepository
+    private val eventDetailRepository: EventDetailRepository
 ) {
     
     private val logger = LoggerFactory.getLogger(EventDetailController::class.java)
@@ -187,7 +179,7 @@ class EventDetailController(
             val eventDetail = eventDetailService.getEventDetail(
                 eventId = request.eventId,
                 eventDetailId = request.eventDetailId,
-                currentUserId = request.currentUserId
+                currentUserId = 1
             )
 
             logger.info("대회 상세 조회 성공 (POST): eventId= {request.eventId}, " +
@@ -215,8 +207,8 @@ class EventDetailController(
 
     @GetMapping("/event-info/{eventId}")
     @Operation(
-        summary = "이벤트 및 코스 정보 조회",
-        description = "eventId로 현재 DB에 존재하는 이벤트 정보와 코스 정보를 조회합니다."
+        summary = "이벤트 및 이벤트 상세 정보 조회",
+        description = "eventId로 현재 DB에 존재하는 이벤트 정보와 이벤트 상세 정보를 조회합니다."
     )
     fun getEventAndCourseInfo(
         @Parameter(description = "이벤트 ID", required = true)
@@ -228,45 +220,46 @@ class EventDetailController(
                 return ResponseEntity.notFound().build()
             }
             val event = eventOpt.get()
-            val courses = courseRepository.findByEventIdOrderByDistanceKmAsc(eventId)
+            val eventDetails = eventDetailRepository.findByEventIdOrderByDistanceAsc(eventId)
+            
             val eventData = mapOf(
                 "id" to event.id,
-                "eventName" to event.eventName,
-                "eventDate" to event.eventDate,
-                "eventStatus" to event.eventStatus,
-                "description" to event.description,
-                "registrationStartDate" to event.registrationStartDate,
-                "registrationEndDate" to event.registrationEndDate,
+                "name" to event.name,
+                "sports" to event.sports,
+                "startDateTime" to event.startDateTime,
+                "endDateTime" to event.endDateTime,
+                "country" to event.country,
+                "city" to event.city,
+                "address" to event.address,
+                "place" to event.place,
+                "latitude" to event.latitude,
+                "longitude" to event.longitude,
+                "thumbnail" to event.thumbnail,
                 "createdAt" to event.createdAt,
                 "updatedAt" to event.updatedAt
             )
-            val courseList = courses.map { course ->
+            
+            val eventDetailsList = eventDetails.map { eventDetail ->
                 mapOf(
-                    "courseId" to course.courseId,
-                    "courseName" to course.courseName,
-                    "eventId" to course.eventId,
-                    "eventDetailId" to course.eventDetailId,
-                    "distanceKm" to course.distanceKm,
-                    "categoryName" to course.categoryName,
-                    "gpxFileUrl" to course.gpxFileUrl,
-                    "gpxDataHash" to course.gpxDataHash,
-                    "startPointLat" to course.startPointLat,
-                    "startPointLng" to course.startPointLng,
-                    "endPointLat" to course.endPointLat,
-                    "endPointLng" to course.endPointLng,
-                    "createdAt" to course.createdAt,
-                    "updatedAt" to course.updatedAt
+                    "id" to eventDetail.id,
+                    "eventId" to eventDetail.eventId,
+                    "distance" to eventDetail.distance,
+                    "course" to eventDetail.course,
+                    "gpxFile" to eventDetail.gpxFile,
+                    "createdAt" to eventDetail.createdAt,
+                    "updatedAt" to eventDetail.updatedAt
                 )
             }
+            
             val response = mapOf(
                 "data" to mapOf(
                     "event" to eventData,
-                    "courses" to courseList
+                    "eventDetails" to eventDetailsList
                 )
             )
             ResponseEntity.ok(response)
         } catch (e: Exception) {
-            logger.error("이벤트 및 코스 정보 조회 실패: eventId=$eventId", e)
+            logger.error("이벤트 및 이벤트 상세 정보 조회 실패: eventId=$eventId", e)
             ResponseEntity.internalServerError().build()
         }
     }

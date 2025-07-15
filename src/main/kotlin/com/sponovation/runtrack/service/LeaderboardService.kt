@@ -262,7 +262,7 @@ class LeaderboardService(
      * leaderboard:{eventDetailId} Redis Sorted Set에서 해당 대회 코스(eventDetailId)의 상위 3명의 userId(Long)를 조회합니다.
      * 점수가 낮을수록 높은 순위입니다. (체크포인트 진행도 + 누적 시간 기준)
      * 
-     * @param eventDetailId 이벤트 상세 ID (Course ID)
+     * @param eventDetailId 이벤트 상세 ID (EventDetail ID)
      * @return 상위 3명의 userId(Long) 리스트 (순위순으로 정렬)
      */
     fun getTopRankers(eventDetailId: Long): List<Long> {
@@ -296,7 +296,7 @@ class LeaderboardService(
     /**
      * 상위 3명의 랭커 상세 정보 조회 (점수 포함)
      * 
-     * @param eventDetailId 이벤트 상세 ID (Course ID)
+     * @param eventDetailId 이벤트 상세 ID (EventDetail ID)
      * @return 상위 3명의 사용자 ID(Long)와 점수 정보 리스트
      */
     fun getTopRankersWithScores(eventDetailId: String): List<Pair<Long, Double>> {

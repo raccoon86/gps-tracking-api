@@ -1,26 +1,22 @@
 package com.sponovation.runtrack.domain
 
-import com.sponovation.runtrack.enums.EventStatus
 import jakarta.persistence.*
-import java.time.LocalDate
+import jakarta.validation.constraints.*
+import org.springframework.data.annotation.CreatedDate
+import org.springframework.data.annotation.LastModifiedDate
+import org.springframework.data.jpa.domain.support.AuditingEntityListener
+import java.math.BigDecimal
 import java.time.LocalDateTime
 
 /**
  * 이벤트 정보를 저장하는 엔티티
  * 
  * 마라톤 대회, 러닝 이벤트, 스포츠 경기 등 각종 이벤트의 
- * 기본 정보와 참가 신청 관련 정보를 관리합니다.
- * 
- * 이벤트 생명주기:
- * - DRAFT: 초안 상태 (아직 공개되지 않음)
- * - SCHEDULED: 예정된 이벤트 (참가 신청 가능)
- * - COMPLETED: 완료된 이벤트
- * - UNCONFIRMED: 확정되지 않은 이벤트
- * - HOLD: 보류 상태 (일시적 중단)
- * - CANCELED: 취소된 이벤트
+ * 기본 정보와 장소, 일정 정보를 관리합니다.
  */
 @Entity
 @Table(name = "events")
+@EntityListeners(AuditingEntityListener::class)
 data class Event(
     /** 
      * 이벤트 고유 식별자 (Primary Key)
@@ -35,94 +31,156 @@ data class Event(
      * 사용자에게 표시되는 이벤트의 공식 명칭
      * 예: "2024 서울 마라톤 대회", "한강 러닝 페스티벌"
      */
-    @Column(nullable = false, length = 200)
-    val eventName: String,
+    @field:NotBlank(message = "이벤트 이름은 필수입니다")
+    @field:Size(max = 255, message = "이벤트 이름은 255자를 초과할 수 없습니다")
+    @Column(name = "name", length = 255)
+    val name: String,
 
     /** 
-     * 이벤트 개최 날짜
-     * 이벤트가 실제로 진행되는 날짜
+     * 스포츠 종목
+     * 해당 이벤트의 스포츠 종목 (예: 마라톤, 축구, 농구 등)
      */
-    @Column(nullable = false)
-    val eventDate: LocalDate,
+    @field:Size(max = 30, message = "스포츠 종목은 30자를 초과할 수 없습니다")
+    @Column(name = "sports", length = 30)
+    val sports: String? = null,
 
     /** 
-     * 이벤트 상태
-     * 현재 이벤트의 진행 상태를 나타내는 열거형 값
-     * 
-     * @see EventStatus 상태 열거형 정의
+     * 이벤트 시작 일시
+     * 이벤트가 시작되는 정확한 날짜와 시간
      */
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    val eventStatus: EventStatus,
+    @field:NotNull(message = "시작 일시는 필수입니다")
+    @Column(name = "start_date_time", nullable = false)
+    val startDateTime: LocalDateTime,
 
     /** 
-     * 이벤트 설명
-     * 이벤트에 대한 상세 설명, 규칙, 주의사항 등을 포함
+     * 이벤트 종료 일시
+     * 이벤트가 종료되는 정확한 날짜와 시간
      */
-    @Column(columnDefinition = "TEXT")
-    val description: String? = null,
+    @field:NotNull(message = "종료 일시는 필수입니다")
+    @Column(name = "end_date_time", nullable = false)
+    val endDateTime: LocalDateTime,
 
     /** 
-     * 참가 신청 시작일
-     * 참가자들이 이벤트에 신청할 수 있는 시작 날짜
+     * 국가
+     * 이벤트가 개최되는 국가 (ISO 국가 코드 또는 국가명)
      */
-    @Column
-    val registrationStartDate: LocalDate? = null,
+    @field:NotBlank(message = "국가는 필수입니다")
+    @field:Size(max = 20, message = "국가는 20자를 초과할 수 없습니다")
+    @Column(name = "country", length = 20, nullable = false)
+    val country: String,
 
     /** 
-     * 참가 신청 마감일
-     * 참가자들이 이벤트에 신청할 수 있는 마지막 날짜
+     * 도시
+     * 이벤트가 개최되는 도시명
      */
-    @Column
-    val registrationEndDate: LocalDate? = null,
+    @field:NotBlank(message = "도시는 필수입니다")
+    @field:Size(max = 255, message = "도시는 255자를 초과할 수 없습니다")
+    @Column(name = "city", length = 255, nullable = false)
+    val city: String,
+
+    /** 
+     * 주소
+     * 이벤트 개최지의 상세 주소
+     */
+    @field:Size(max = 200, message = "주소는 200자를 초과할 수 없습니다")
+    @Column(name = "address", length = 200)
+    val address: String? = null,
+
+    /** 
+     * 장소명
+     * 이벤트가 개최되는 구체적인 장소명 (예: 올림픽 공원, 잠실 주경기장)
+     */
+    @field:Size(max = 255, message = "장소명은 255자를 초과할 수 없습니다")
+    @Column(name = "place", length = 255)
+    val place: String? = null,
+
+    /** 
+     * 위도
+     * 이벤트 개최지의 GPS 위도 좌표 (소수점 6자리)
+     */
+    @field:DecimalMin(value = "-90.0", message = "위도는 -90.0 이상이어야 합니다")
+    @field:DecimalMax(value = "90.0", message = "위도는 90.0 이하여야 합니다")
+    @Column(name = "latitude", precision = 9, scale = 6)
+    val latitude: BigDecimal? = null,
+
+    /** 
+     * 경도
+     * 이벤트 개최지의 GPS 경도 좌표 (소수점 6자리)
+     */
+    @field:DecimalMin(value = "-180.0", message = "경도는 -180.0 이상이어야 합니다")
+    @field:DecimalMax(value = "180.0", message = "경도는 180.0 이하여야 합니다")
+    @Column(name = "longitude", precision = 9, scale = 6)
+    val longitude: BigDecimal? = null,
+
+    /** 
+     * 썸네일 이미지 URL
+     * 이벤트를 대표하는 썸네일 이미지의 URL 또는 파일 경로
+     */
+    @Column(name = "thumbnail", length = 255)
+    val thumbnail: String? = null,
 
     /** 
      * 생성 일시
-     * 이벤트가 시스템에 등록된 시간
+     * 이벤트가 시스템에 등록된 시간 (자동 생성)
      */
-    @Column(nullable = false)
+    @CreatedDate
+    @Column(name = "created_at", nullable = false, updatable = false)
     val createdAt: LocalDateTime = LocalDateTime.now(),
 
     /** 
      * 마지막 업데이트 일시
-     * 이벤트 정보가 마지막으로 수정된 시간
+     * 이벤트 정보가 마지막으로 수정된 시간 (자동 업데이트)
      */
-    @Column(nullable = false)
+    @LastModifiedDate
+    @Column(name = "updated_at", nullable = false)
     var updatedAt: LocalDateTime = LocalDateTime.now()
 ) {
     /**
      * 현재 시간을 기준으로 이벤트가 진행 중인지 확인
      */
     fun isOngoing(): Boolean {
-        val now = LocalDate.now()
-        return eventDate.isEqual(now) && eventStatus == EventStatus.SCHEDULED
+        val now = LocalDateTime.now()
+        return now.isAfter(startDateTime) && now.isBefore(endDateTime)
     }
     
     /**
      * 현재 시간을 기준으로 이벤트가 완료되었는지 확인
      */
     fun isFinished(): Boolean {
-        val now = LocalDate.now()
-        return eventDate.isBefore(now) || eventStatus == EventStatus.COMPLETED
+        val now = LocalDateTime.now()
+        return now.isAfter(endDateTime)
     }
     
     /**
-     * 현재 시간을 기준으로 참가 신청이 가능한지 확인
+     * 현재 시간을 기준으로 이벤트가 시작 전인지 확인
      */
-    fun isRegistrationOpen(): Boolean {
-        val now = LocalDate.now()
-        return registrationStartDate != null && 
-               registrationEndDate != null &&
-               !now.isBefore(registrationStartDate) &&
-               !now.isAfter(registrationEndDate) &&
-               eventStatus == EventStatus.SCHEDULED
+    fun isUpcoming(): Boolean {
+        val now = LocalDateTime.now()
+        return now.isBefore(startDateTime)
     }
     
     /**
-     * 엔티티 업데이트 시 자동으로 updatedAt 필드를 현재 시간으로 설정
+     * 이벤트 기간이 유효한지 확인 (시작일시가 종료일시보다 빠른지)
      */
+    fun hasValidTimeRange(): Boolean {
+        return startDateTime.isBefore(endDateTime)
+    }
+    
+    /**
+     * GPS 좌표가 설정되어 있는지 확인
+     */
+    fun hasGpsCoordinates(): Boolean {
+        return latitude != null && longitude != null
+    }
+    
+    /**
+     * 엔티티 생성/수정 시 시간 범위 유효성 검증
+     */
+    @PrePersist
     @PreUpdate
-    fun onUpdate() {
-        updatedAt = LocalDateTime.now()
+    fun validateTimeRange() {
+        if (!hasValidTimeRange()) {
+            throw IllegalArgumentException("시작 일시는 종료 일시보다 빨라야 합니다")
+        }
     }
 } 

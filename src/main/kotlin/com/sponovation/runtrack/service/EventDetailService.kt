@@ -1,5 +1,6 @@
 package com.sponovation.runtrack.service
 
+import com.sponovation.runtrack.domain.EventDetail
 import com.sponovation.runtrack.dto.*
 import com.sponovation.runtrack.repository.EventRepository
 import com.sponovation.runtrack.repository.CourseRepository
@@ -22,8 +23,6 @@ import java.time.LocalDate
 class EventDetailService(
     private val eventRepository: EventRepository,
     private val courseRepository: CourseRepository,
-    private val userRepository: UserRepository,
-    private val eventParticipantRepository: EventParticipantRepository,
     private val leaderboardService: LeaderboardService,
     private val redisTemplate: RedisTemplate<String, Any>
 ) {
@@ -48,7 +47,7 @@ class EventDetailService(
      * 대회 상세 정보 조회
      * 
      * @param eventId 이벤트 ID (Event 테이블의 기본키)
-     * @param eventDetailId 이벤트 상세 ID (Course 테이블의 기본키로 해석)
+     * @param eventDetailId 이벤트 상세 ID (EventDetail 테이블의 기본키로 해석)
      * @param currentUserId 현재 로그인한 사용자 ID (선택사항)
      * @return 대회 상세 정보
      */
@@ -64,17 +63,11 @@ class EventDetailService(
             val event = eventRepository.findById(eventId)
                 .orElseThrow { IllegalArgumentException("해당 대회를 찾을 수 없습니다: $eventId") }
             
-            logger.info("대회 조회 완료: eventName=${event.eventName}, status=${event.eventStatus}")
-            
-            // 대회 진행 상태 확인
-            if (!isEventOngoing(event.eventStatus, event.eventDate)) {
-                throw IllegalArgumentException("대회가 진행 중이 아닙니다: ${event.eventStatus}")
-            }
-            
+            logger.info("대회 조회 완료: eventName=${event.name}")
+
             // 2. 코스 정보 및 GPX 파일 URL 조회
             val courseInfo = getCourseInfoAndGpxUrl(eventId, eventDetailId)
-            logger.info("코스 조회 완료: courseName=${courseInfo.courseName}, distance=${courseInfo.distanceKm}km")
-            
+
             // 3. 참가자 위치 데이터 조회 (1~3위 + 트래커 목록)
             val participantsLocations = getParticipantsLocations(eventId, eventDetailId, currentUserId)
             
@@ -88,16 +81,12 @@ class EventDetailService(
             val response = EventDetailResponseDto(
                 eventId = eventId,
                 eventDetailId = eventDetailId,
-                competitionName = event.eventName, // 실제 대회 이름 사용
+                name = event.name, // 실제 대회 이름 사용
                 courseCategory = courseCategory,
-                gpxFile = courseInfo.gpxFileUrl, // 실제 GPX 파일 URL 사용
                 participantsLocations = participantsLocations,
                 topRankers = topRankers
             )
             
-            logger.info("대회 상세 조회 완료: competitionName=${event.eventName}, " +
-                "gpxFile=${courseInfo.gpxFileUrl}, courseCount=${courseCategory.size}, " +
-                "참가자 위치 수=${participantsLocations.size}, 상위 랭커 수=${topRankers.size}")
             return response
             
         } catch (e: Exception) {
@@ -137,14 +126,14 @@ class EventDetailService(
     /**
      * 코스 카테고리 정보 조회
      * 
-     * @param courses 코스 리스트
+     * @param cours 코스 리스트
      * @return 코스 카테고리 리스트
      */
-    private fun getCourseCategories(courses: List<com.sponovation.runtrack.domain.Course>): List<CourseCategoryDto> {
-        return courses.map { course ->
+    private fun getCourseCategories(eventDetail: List<EventDetail>): List<CourseCategoryDto> {
+        return eventDetail.map { course ->
             CourseCategoryDto(
-                course = course.distanceKm.toDouble(), // BigDecimal을 Double로 변환
-                eventDetailId = course.courseId.toString() // UUID를 문자열로 변환
+                course = course.distance?.toDouble(), // BigDecimal을 Double로 변환
+                eventDetailId = course.id // UUID를 문자열로 변환
             )
         }
     }
@@ -532,9 +521,9 @@ class EventDetailService(
      * @param eventDetailId 이벤트 상세 ID (코스 ID)
      * @return 코스 정보
      */
-    private fun getCourseInfoAndGpxUrl(eventId: Long, eventDetailId: Long): com.sponovation.runtrack.domain.Course {
+    private fun getCourseInfoAndGpxUrl(eventId: Long, eventDetailId: Long): com.sponovation.runtrack.domain.EventDetail {
         try {
-            // 방법 1: eventDetailId를 직접 Course ID로 사용하여 조회 시도
+            // 방법 1: eventDetailId를 직접 EventDetail ID로 사용하여 조회 시도
             val directCourse = courseRepository.findById(eventDetailId)
             
             if (directCourse.isPresent) {
@@ -543,7 +532,7 @@ class EventDetailService(
             }
             
             // 방법 2: Event에 속한 코스들 중에서 조회
-            val courses = courseRepository.findByEventIdOrderByDistanceKmAsc(eventId)
+            val courses = courseRepository.findByEventIdOrderByDistanceAsc(eventId)
             
             if (courses.isNotEmpty()) {
                 // 첫 번째 코스를 기본 코스로 사용 (현재는 단일 코스만 지원)
@@ -553,7 +542,7 @@ class EventDetailService(
             }
             
             // 방법 3: eventDetailId를 이용한 대체 조회 방법 (향후 확장)
-            // TODO: eventDetailId와 Course 간의 명확한 매핑 테이블 구현 시 사용
+            // TODO: eventDetailId와 EventDetail 간의 명확한 매핑 테이블 구현 시 사용
             
             throw IllegalArgumentException("해당 대회의 코스 정보를 찾을 수 없습니다: eventId=$eventId, eventDetailId=$eventDetailId")
             

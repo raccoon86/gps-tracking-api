@@ -475,10 +475,10 @@
             log("⚠️ 이벤트 생성 실패 (이미 존재하거나 오류)");
           }
 
-          // 2. Course 생성
+          // 2. EventDetail 생성
           log("2. 코스 생성 중...");
           const courseResponse = await fetch(
-            `${API_BASE}/api/gpx/create-test-course?eventId=${EVENT_ID}&courseId=${EVENT_DETAIL_ID}&courseName=TestCourse`,
+            `${API_BASE}/api/gpx/create-test-course?eventId=${EVENT_ID}&eventDetailId=${EVENT_DETAIL_ID}&courseName=TestCourse`,
             {
               method: "POST",
             }
@@ -1545,7 +1545,7 @@
         log("🛤️ 코스 생성 시작...");
         try {
           const response = await fetch(
-            `${API_BASE}/api/gpx/create-test-course?eventId=${EVENT_ID}&courseId=${EVENT_DETAIL_ID}&courseName=TestCourse`,
+            `${API_BASE}/api/gpx/create-test-course?eventId=${EVENT_ID}&eventDetailId=${EVENT_DETAIL_ID}&courseName=TestCourse`,
             {
               method: "POST",
             }

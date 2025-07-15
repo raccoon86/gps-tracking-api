@@ -17,9 +17,9 @@ import java.time.LocalDateTime
  * - 참가자 통과 여부 추적
  * 
  * 관계 매핑:
- * - Course: 다대일 관계 (여러 체크포인트가 하나의 코스에 속함)
+ * - EventDetail: 다대일 관계 (여러 체크포인트가 하나의 코스에 속함)
  * 
- * @see Course 코스 정보
+ * @see EventDetail 코스 정보
  */
 @Entity
 @Table(
@@ -54,7 +54,7 @@ data class Checkpoint(
      */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "course_id", nullable = false)
-    val course: Course,
+    val eventDetail: EventDetail,
 
     /**
      * 체크포인트 명칭

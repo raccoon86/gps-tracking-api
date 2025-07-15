@@ -1,6 +1,5 @@
 package com.sponovation.runtrack.controller
 
-import com.google.protobuf.Api
 import com.sponovation.runtrack.dto.*
 import com.sponovation.runtrack.common.ApiResponse
 import com.sponovation.runtrack.service.GpxService
@@ -9,8 +8,8 @@ import com.sponovation.runtrack.service.CheckpointTimesService
 import com.sponovation.runtrack.service.ParticipantSegmentRecordsService
 import com.sponovation.runtrack.service.LeaderboardService
 import com.sponovation.runtrack.service.GpxParsingRedisService
-import com.sponovation.runtrack.repository.CourseRepository
-import com.sponovation.runtrack.domain.Course
+import com.sponovation.runtrack.repository.EventDetailRepository
+import com.sponovation.runtrack.domain.EventDetail
 import com.sponovation.runtrack.domain.Event
 import com.sponovation.runtrack.enums.EventStatus
 import java.math.BigDecimal
@@ -59,7 +58,7 @@ class GpxController(
     private val leaderboardService: LeaderboardService,
     private val eventRepository: EventRepository,
     private val gpxParsingRedisService: GpxParsingRedisService,
-    private val courseRepository: CourseRepository,
+    private val eventDetailRepository: EventDetailRepository,
     private val redisTemplate: RedisTemplate<String, Any>
 ) {
 
@@ -74,7 +73,7 @@ class GpxController(
      * 1. 대회 및 코스 유효성 확인
      * 2. Redis에서 GPX 파싱 데이터 및 웨이포인트(CP) 조회
      * 3. GPX 데이터 로드 및 보간 (Redis에 데이터가 없는 경우)
-     *    - Course 테이블에서 GPX 파일 URL 조회
+     *    - EventDetail 테이블에서 GPX 파일 URL 조회
      *    - S3에서 GPX 파일 다운로드
      *    - 웨이포인트 간 100미터 당 보간 포인트 생성
      *    - 각 CP에 cpId와 cpIndex 부여
@@ -132,22 +131,22 @@ class GpxController(
                 try {
                     logger.info("S3에서 GPX 파일 로드 및 파싱 시작: eventId=${request.eventId}, eventDetailId=${request.eventDetailId}")
 
-                    // Course 조회 (eventDetailId를 통해)
+                    // EventDetail 조회 (eventDetailId를 통해)
                     val course = findCourseByEventDetailId(request.eventDetailId)
                     if (course == null) {
-                        logger.warn("Course 정보를 찾을 수 없음: eventDetailId=${request.eventDetailId}")
-                        throw NoSuchElementException("Course 정보를 찾을 수 없습니다: eventDetailId=${request.eventDetailId}")
+                        logger.warn("EventDetail 정보를 찾을 수 없음: eventDetailId=${request.eventDetailId}")
+                        throw NoSuchElementException("EventDetail 정보를 찾을 수 없습니다: eventDetailId=${request.eventDetailId}")
                     }
 
                     // S3 GPX 파일 URL 추출
-                    val gpxFileUrl = course.gpxFileUrl
+                    val gpxFileUrl = course.gpxFile
                     logger.info("S3 GPX 파일 URL: $gpxFileUrl")
 
                     // S3에서 GPX 파일 다운로드 및 파싱
                     val gpxFileBytes = downloadGpxFromS3(gpxFileUrl)
 
                     // ByteArray를 MultipartFile로 변환
-                    val multipartFile = createMultipartFileFromBytes(gpxFileBytes, "course.gpx")
+                    val multipartFile = createMultipartFileFromBytes(gpxFileBytes, "eventDetail.gpx")
 
                     // GPX 파싱 및 Redis 저장
                     val parseResult = gpxParsingRedisService.parseAndSaveGpxFile(
@@ -268,7 +267,7 @@ class GpxController(
      *
      * @param userId 사용자 ID
      * @param eventId 이벤트 ID
-     * @param eventDetailId 이벤트 상세 ID (Course ID)
+     * @param eventDetailId 이벤트 상세 ID (EventDetail ID)
      * @return 유효성 검사 결과
      */
     private fun validateEventAndCourse(
@@ -288,22 +287,15 @@ class GpxController(
                 return ErrorResponse.ValidationResult(false, "EVENT_NOT_FOUND", "해당 이벤트를 찾을 수 없습니다.")
             }
 
-            // 2. Event 진행 여부 확인
-            if (!event.isOngoing()) {
-                logger.warn("Event가 진행 중이 아님: eventId=$eventId, status=${event.eventStatus}")
-                return ErrorResponse.ValidationResult(false, "EVENT_NOT_ONGOING", "이벤트가 진행 중이 아닙니다.")
-            }
-
-            // 3. Course 정보 조회 (eventDetailId를 courseId로 사용)
-            val course = courseRepository.findByEventDetailId(eventDetailId)
-                .orElse(null)
+            // 2. EventDetail 정보 조회 (eventDetailId를 courseId로 사용)
+            val course = eventDetailRepository.findById(eventDetailId).orElse(null)
 
             if (course == null) {
                 logger.warn("Course를 찾을 수 없음: eventDetailId=$eventDetailId")
                 return ErrorResponse.ValidationResult(false, "COURSE_NOT_FOUND", "해당 코스를 찾을 수 없습니다.")
             }
 
-            // 4. GPX 파싱 데이터 존재 여부 확인
+            // 3. GPX 파싱 데이터 존재 여부 확인
             val gpxParsingData = gpxParsingRedisService.getGpxParsingData(
                 eventId = eventId,
                 eventDetailId = eventDetailId
@@ -315,8 +307,8 @@ class GpxController(
             }
 
             logger.info("대회 및 코스 유효성 검사 통과: userId=$userId, eventId=$eventId, eventDetailId=$eventDetailId")
-            logger.info("- Event: ${event.eventName}")
-            logger.info("- Course: ${course.courseName}")
+            logger.info("- Event: ${event.name}")
+            logger.info("- EventDetail: ${course.course}")
             logger.info("- GPX 포인트 수: ${gpxParsingData.points.size}")
 
             ErrorResponse.ValidationResult(true, null, null)
@@ -345,12 +337,10 @@ class GpxController(
         @Parameter(description = "생성할 Event ID", required = true)
         @RequestParam("eventId") eventId: Long,
         @Parameter(description = "이벤트 이름", required = true)
-        @RequestParam("eventName") eventName: String
+        @RequestParam("name") name: String
     ): ResponseEntity<Any> {
 
         return try {
-            logger.info("테스트 Event 생성 시작: eventId=$eventId, eventName=$eventName")
-
             // 이미 존재하는 Event인지 확인
             val existingEvent = eventRepository.findById(eventId)
             if (existingEvent.isPresent) {
@@ -358,10 +348,12 @@ class GpxController(
                 val event = existingEvent.get()
                 val response = mapOf(
                     "eventId" to event.id,
-                    "eventName" to event.eventName,
-                    "eventDate" to event.eventDate.toString(),
-                    "eventStatus" to event.eventStatus.name,
-                    "isOngoing" to event.isOngoing(),
+                    "eventName" to event.name,
+                    "sports" to event.sports,
+                    "startDateTime" to event.startDateTime.toString(),
+                    "endDateTime" to event.endDateTime.toString(),
+                    "country" to event.country,
+                    "city" to event.city,
                     "createdAt" to event.createdAt.toString(),
                     "message" to "기존 이벤트 사용"
                 )
@@ -370,24 +362,31 @@ class GpxController(
 
             // Event 생성 (ID 자동 생성 방식)
             val event = Event(
-                eventName = eventName,
-                eventDate = LocalDate.now(), // 오늘 날짜
-                eventStatus = EventStatus.SCHEDULED,
-                description = "테스트용 이벤트",
-                registrationStartDate = LocalDate.now().minusDays(7), // 7일 전부터 신청 가능
-                registrationEndDate = LocalDate.now().plusDays(1), // 내일까지 신청 가능
-                createdAt = LocalDateTime.now(),
-                updatedAt = LocalDateTime.now()
+                name = name,
+                sports = "마라톤",
+                startDateTime = LocalDateTime.now().plusDays(1), // 내일 시작
+                endDateTime = LocalDateTime.now().plusDays(1).plusHours(6), // 내일 6시간 후 종료
+                country = "대한민국",
+                city = "서울",
+                address = "테스트 주소",
+                place = "테스트 장소",
+                latitude = 37.5413553485092.toBigDecimal(),
+                longitude = 127.115719020367.toBigDecimal(),
+                thumbnail = "test://thumbnail/test.jpg"
             )
 
             val savedEvent = eventRepository.save(event)
 
             val response = mapOf(
                 "eventId" to savedEvent.id,
-                "eventName" to savedEvent.eventName,
-                "eventDate" to savedEvent.eventDate.toString(),
-                "eventStatus" to savedEvent.eventStatus.name,
+                "eventName" to savedEvent.name,
+                "sports" to savedEvent.sports,
+                "startDateTime" to savedEvent.startDateTime.toString(),
+                "endDateTime" to savedEvent.endDateTime.toString(),
+                "country" to savedEvent.country,
+                "city" to savedEvent.city,
                 "isOngoing" to savedEvent.isOngoing(),
+                "isUpcoming" to savedEvent.isUpcoming(),
                 "createdAt" to savedEvent.createdAt.toString(),
                 "message" to "새 이벤트 생성"
             )
@@ -402,19 +401,19 @@ class GpxController(
     }
 
     /**
-     * 테스트용 Course 생성
+     * 테스트용 EventDetail 생성
      *
-     * 테스트 환경에서 Course 엔티티를 생성합니다.
+     * 테스트 환경에서 EventDetail 엔티티를 생성합니다.
      *
      * @param eventId Event ID (Long)
-     * @param courseId Course ID (Long을 UUID로 변환)
+     * @param courseId EventDetail ID (Long을 UUID로 변환)
      * @param courseName 코스 이름
-     * @return 생성된 Course 정보
+     * @return 생성된 EventDetail 정보
      */
     @PostMapping("/create-test-course")
     @Operation(
-        summary = "테스트용 Course 생성",
-        description = "테스트 환경에서 Course 엔티티를 생성합니다."
+        summary = "테스트용 EventDetail 생성",
+        description = "테스트 환경에서 EventDetail 엔티티를 생성합니다."
     )
     fun createTestCourse(
         @Parameter(description = "Event ID", required = true)
@@ -426,62 +425,50 @@ class GpxController(
     ): ResponseEntity<Any> {
 
         return try {
-            logger.info("테스트 Course 생성 시작: eventId=$eventId, eventDetailId=$eventDetailId, courseName=$courseName")
+            logger.info("테스트 EventDetail 생성 시작: eventId=$eventId, eventDetailId=$eventDetailId, courseName=$courseName")
 
-            // 이미 존재하는 Course인지 확인
-            val existingCourse = courseRepository.findById(eventDetailId)
-            if (existingCourse.isPresent) {
-                logger.info("이미 존재하는 Course 반환: courseId=$eventDetailId")
-                val course = existingCourse.get()
+            // 이미 존재하는 EventDetail인지 확인
+            val existingEventDetail = eventDetailRepository.findById(eventDetailId)
+            if (existingEventDetail.isPresent) {
+                logger.info("이미 존재하는 EventDetail 반환: eventDetailId=$eventDetailId")
+                val eventDetail = existingEventDetail.get()
                 val response = mapOf(
-                    "courseId" to course.courseId.toString(),
-                    "courseName" to course.courseName,
-                    "eventId" to course.eventId.toString(),
-                    "eventDetailId" to course.eventDetailId.toString(),
-                    "distanceKm" to course.distanceKm.toString(),
-                    "categoryName" to course.categoryName,
-                    "gpxFileUrl" to course.gpxFileUrl,
-                    "createdAt" to course.createdAt.toString(),
-                    "message" to "기존 코스 사용"
+                    "eventDetailId" to eventDetail.id,
+                    "eventId" to eventDetail.eventId,
+                    "distance" to eventDetail.distance,
+                    "course" to eventDetail.course,
+                    "gpxFile" to eventDetail.gpxFile,
+                    "createdAt" to eventDetail.createdAt.toString(),
+                    "message" to "기존 이벤트 상세 사용"
                 )
                 return ResponseEntity.ok(response)
             }
 
-            // Course 생성
-            val course = Course(
+            // EventDetail 생성
+            val eventDetail = EventDetail(
                 eventId = eventId,
-                courseName = courseName,
-                eventDetailId = eventDetailId,
-                distanceKm = BigDecimal("5.0"), // 기본 5km
-                categoryName = "테스트 코스",
-                gpxFileUrl = "test://gpx/test_route.gpx",
-                gpxDataHash = "test_hash_${System.currentTimeMillis()}",
-                startPointLat = BigDecimal("37.5413553485092"),
-                startPointLng = BigDecimal("127.115719020367"),
-                endPointLat = BigDecimal("37.5235713846696"),
-                endPointLng = BigDecimal("127.101398706436"),
-                createdAt = LocalDateTime.now(),
-                updatedAt = LocalDateTime.now()
+                distance = 5, // 기본 5km
+                course = courseName,
+                gpxFile = "test://gpx/test_route.gpx"
             )
 
-            val savedCourse = courseRepository.save(course)
+            val savedEventDetail = eventDetailRepository.save(eventDetail)
 
             val response = mapOf(
-                "courseId" to savedCourse.courseId.toString(),
-                "courseName" to savedCourse.courseName,
-                "eventId" to savedCourse.eventId.toString(),
-                "distanceKm" to savedCourse.distanceKm.toString(),
-                "categoryName" to savedCourse.categoryName,
-                "gpxFileUrl" to savedCourse.gpxFileUrl,
-                "createdAt" to savedCourse.createdAt.toString(),
-                "message" to "새 코스 생성"
+                "eventDetailId" to savedEventDetail.id,
+                "eventId" to savedEventDetail.eventId,
+                "distance" to savedEventDetail.distance,
+                "course" to savedEventDetail.course,
+                "gpxFile" to savedEventDetail.gpxFile,
+                "createdAt" to savedEventDetail.createdAt.toString(),
+                "message" to "새 이벤트 상세 생성"
             )
 
-            logger.info("테스트 Course 생성 성공: courseId=${savedCourse.courseId}")
+            logger.info("테스트 EventDetail 생성 성공: eventDetailId=${savedEventDetail.id}")
             ResponseEntity.ok(ApiResponse(data = response))
 
         } catch (e: Exception) {
-            logger.error("테스트 Course 생성 실패: eventId=$eventId, eventDetailId=$eventDetailId", e)
+            logger.error("테스트 EventDetail 생성 실패: eventId=$eventId, eventDetailId=$eventDetailId", e)
             ResponseEntity.internalServerError().build()
         }
     }
@@ -492,7 +479,7 @@ class GpxController(
      * 테스트 환경에서 GPS 시뮬레이션을 위한 5명의 테스트 유저를 생성합니다.
      *
      * @param eventId Event ID
-     * @param eventDetailId Event Detail ID (Course ID)
+     * @param eventDetailId Event Detail ID (EventDetail ID)
      * @return 생성된 유저 정보 목록
      */
     @PostMapping("/create-test-users")
@@ -835,23 +822,23 @@ class GpxController(
     }
 
     /**
-     * eventDetailId를 통해 Course 조회
+     * eventDetailId를 통해 EventDetail 조회
      *
      * @param eventDetailId 이벤트 상세 ID
-     * @return Course 엔티티 또는 null
+     * @return EventDetail 엔티티 또는 null
      */
-    private fun findCourseByEventDetailId(eventDetailId: Long): Course? {
+    private fun findCourseByEventDetailId(eventDetailId: Long): EventDetail? {
         return try {
             // eventDetailId를 courseId로 직접 사용하여 조회
-            val course = courseRepository.findById(eventDetailId)
+            val course = eventDetailRepository.findById(eventDetailId)
             if (course.isPresent) {
                 course.get()
             } else {
-                logger.warn("Course 조회 실패: courseId=$eventDetailId")
+                logger.warn("EventDetail 조회 실패: courseId=$eventDetailId")
                 null
             }
         } catch (e: Exception) {
-            logger.error("Course 조회 중 오류 발생: eventDetailId=$eventDetailId", e)
+            logger.error("EventDetail 조회 중 오류 발생: eventDetailId=$eventDetailId", e)
             null
         }
     }

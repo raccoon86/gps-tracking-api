@@ -1,14 +1,8 @@
 package com.sponovation.runtrack.repository
 
-import com.sponovation.runtrack.domain.Course
-import org.springframework.data.domain.Page
-import org.springframework.data.domain.Pageable
+import com.sponovation.runtrack.domain.EventDetail
 import org.springframework.data.jpa.repository.JpaRepository
-import org.springframework.data.jpa.repository.Query
-import org.springframework.data.repository.query.Param
 import org.springframework.stereotype.Repository
-import java.math.BigDecimal
-import java.util.*
 import java.util.Optional
 
 /**
@@ -19,13 +13,12 @@ import java.util.Optional
  * 코스 관련 비즈니스 로직을 위한 커스텀 쿼리를 추가 정의합니다.
  */
 @Repository
-interface CourseRepository : JpaRepository<Course, Long> {
+interface CourseRepository : JpaRepository<EventDetail, Long> {
     /**
      * 특정 이벤트에 속한 모든 코스를 조회합니다 (리스트)
      * 
      * @param eventId 조회할 이벤트 ID
      * @return 이벤트에 속한 코스 리스트
      */
-    fun findByEventIdOrderByDistanceKmAsc(eventId: Long): List<Course>
-    fun findByEventDetailId(eventDetailId: Long): Optional<Course>
+    fun findByEventIdOrderByDistanceAsc(eventId: Long): List<EventDetail>
 }

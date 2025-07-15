@@ -103,8 +103,8 @@ class CourseDataService(
      * 코스 데이터를 Redis에 저장합니다.
      */
     private fun saveCourseDataToRedis(courseId: String, courseData: CourseData) {
-        val key = "course:$courseId"
-        val eventKey = "course:event:${courseData.eventId}"
+        val key = "eventDetail:$courseId"
+        val eventKey = "eventDetail:event:${courseData.eventId}"
 
         logger.info("Redis에 코스 데이터 저장 시작:")
         logger.info("  - 메인 키: $key")
@@ -145,7 +145,7 @@ class CourseDataService(
      * Redis에서 코스 데이터를 조회합니다.
      */
     fun getCourseData(courseId: String): CourseData? {
-        val key = "course:$courseId"
+        val key = "eventDetail:$courseId"
         logger.info("Redis에서 코스 데이터 조회: $key")
         
         try {
@@ -175,7 +175,7 @@ class CourseDataService(
      * 이벤트 ID로 코스 데이터를 조회합니다.
      */
     fun getCourseDataByEventId(eventId: Long): CourseData? {
-        val eventKey = "course:event:$eventId"
+        val eventKey = "eventDetail:event:$eventId"
         logger.info("이벤트 ID로 코스 데이터 조회: eventId=$eventId")
         
         val courseId = redisTemplate.opsForValue().get(eventKey) as? String
@@ -216,7 +216,7 @@ class CourseDataService(
      * Redis에 저장된 모든 코스 데이터 키를 조회합니다.
      */
     fun getAllCourseKeys(): List<String> {
-        val pattern = "course:course_*"
+        val pattern = "eventDetail:course_*"
         val keys = redisTemplate.keys(pattern)
         
         logger.info("Redis에서 코스 키 조회:")
@@ -234,7 +234,7 @@ class CourseDataService(
      * Redis에 저장된 모든 이벤트 인덱스 키를 조회합니다.
      */
     fun getAllEventIndexKeys(): List<String> {
-        val pattern = "course:event:*"
+        val pattern = "eventDetail:event:*"
         val keys = redisTemplate.keys(pattern)
         
         logger.info("Redis에서 이벤트 인덱스 키 조회:")
@@ -255,8 +255,8 @@ class CourseDataService(
     fun logAllCourseData() {
         logger.info("=== Redis 저장된 모든 코스 데이터 조회 시작 ===")
 
-        val courseKeys = redisTemplate.keys("course:course_*")
-        val eventKeys = redisTemplate.keys("course:event:*")
+        val courseKeys = redisTemplate.keys("eventDetail:course_*")
+        val eventKeys = redisTemplate.keys("eventDetail:event:*")
 
         logger.info("총 코스 데이터 키: ${courseKeys?.size ?: 0}개")
         logger.info("총 이벤트 인덱스 키: ${eventKeys?.size ?: 0}개")
@@ -327,8 +327,8 @@ class CourseDataService(
         
         val courseData = getCourseData(courseId)
         courseData?.let {
-            val mainKey = "course:$courseId"
-            val eventKey = "course:event:${it.eventId}"
+            val mainKey = "eventDetail:$courseId"
+            val eventKey = "eventDetail:event:${it.eventId}"
             
             redisTemplate.delete(mainKey)
             redisTemplate.delete(eventKey)
