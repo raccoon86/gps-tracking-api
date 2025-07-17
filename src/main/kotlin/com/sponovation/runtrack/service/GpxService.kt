@@ -24,8 +24,54 @@ import java.util.concurrent.TimeUnit
 
 
 /**
- * GPX 파일 처리 및 경로 관리 서비스
+ * GPX 파일 처리 및 실시간 위치 보정 서비스
  *
+ * ================================ 핵심 비즈니스 로직 ================================
+ * 
+ * 1. **GPX 경로 관리**
+ *    - GPX 파일 업로드 및 파싱
+ *    - 웨이포인트 추출 및 100미터 간격 보간 포인트 생성
+ *    - Redis 기반 코스 데이터 저장 (DB 저장 기능은 비활성화됨)
+ *    - 체크포인트 자동 생성 (시작점, 중간점, 종료점)
+ * 
+ * 2. **실시간 GPS 위치 보정**
+ *    - 참가자의 실시간 GPS 데이터 수신
+ *    - 3차원 칼만 필터를 통한 GPS 노이즈 제거 및 정확도 향상
+ *    - 맵 매칭 알고리즘을 통한 GPS 위치를 실제 경로에 스냅
+ *    - GPS 신뢰도 및 보정 품질 평가
+ * 
+ * 3. **체크포인트 통과 관리**
+ *    - 실시간 체크포인트 통과 감지 (반경 30m 기준)
+ *    - 구간별 소요 시간 계산 및 누적 시간 관리
+ *    - 체크포인트 통과 이력 Redis 저장
+ *    - 중복 통과 방지 로직
+ * 
+ * 4. **리더보드 시스템**
+ *    - 참가자별 진행 상황 추적 (가장 먼 체크포인트 기준)
+ *    - Redis Sorted Set 기반 실시간 리더보드 업데이트
+ *    - 체크포인트 인덱스와 누적 시간을 조합한 순위 계산
+ * 
+ * 5. **데이터 저장 구조**
+ *    - Redis: 실시간 위치, 체크포인트 통과 시간, 코스 데이터
+ *    - Hash: 개별 참가자 위치 정보
+ *    - Sorted Set: 이벤트별 리더보드
+ *    - String: GPX 파싱 데이터
+ * 
+ * ================================ 알고리즘 특징 ================================
+ * 
+ * - **칼만 필터**: GPS 정확도와 속도를 고려한 가중치 기반 3차원 노이즈 제거
+ * - **맵 매칭**: 보간된 경로 포인트와의 거리, 방향을 고려한 최적 매칭점 탐색
+ * - **체크포인트 감지**: 이전 위치와 현재 위치의 경계 통과 여부로 정확한 통과 시점 판정
+ * - **보정 품질 평가**: GPS 신뢰도, 매칭 점수, 보정 강도를 종합한 4단계 품질 등급
+ * 
+ * ================================ 주요 제약사항 ================================
+ * 
+ * - 체크포인트 통과 인식 반경: 30미터
+ * - 최대 구간 시간: 24시간
+ * - GPX 파일 크기 제한: 10MB
+ * - Redis TTL: 위치 데이터 24시간, 리더보드 7일
+ * - 보간 간격: 100미터
+ * 
  * 현재 도메인 엔티티들이 삭제되어 데이터베이스 저장 기능은 비활성화됨
  * Redis 기반 코스 데이터 저장만 지원
  */
@@ -63,7 +109,33 @@ class GpxService(
     )
 
     /**
-     * Redis에 저장할 위치 데이터 클래스
+     * ================================ GPS 위치 데이터 클래스 ================================
+     * 
+     * Redis에 저장되는 참가자의 GPS 위치 및 보정 정보를 담는 데이터 클래스입니다.
+     * 원본 GPS 센서 데이터와 칼만 필터 + 맵 매칭으로 보정된 데이터를 모두 포함합니다.
+     * 
+     * **데이터 분류:**
+     * 1. 식별 정보: userId, eventId, eventDetailId
+     * 2. 원본 GPS: raw로 시작하는 필드들 (센서 직접 수신값)
+     * 3. 보정 GPS: corrected로 시작하는 필드들 (알고리즘 처리값)
+     * 4. 계산 정보: 이동거리, 시간 등 파생 데이터
+     * 
+     * @property userId 사용자 ID
+     * @property eventId 이벤트 ID  
+     * @property eventDetailId 이벤트 상세 ID (코스 구분용)
+     * @property rawLatitude 원본 GPS 위도 (도, WGS84)
+     * @property rawLongitude 원본 GPS 경도 (도, WGS84)
+     * @property rawAltitude 원본 GPS 고도 (미터, 해수면 기준, null 가능)
+     * @property rawAccuracy GPS 신호 정확도 (미터, 작을수록 정확, null 가능)
+     * @property rawTime GPS 수신 시간 (Unix timestamp, 초)
+     * @property rawSpeed 원본 GPS 속도 (km/h 또는 m/s, null 가능)
+     * @property correctedLatitude 보정된 위도 (칼만 필터 + 맵 매칭 적용)
+     * @property correctedLongitude 보정된 경도 (칼만 필터 + 맵 매칭 적용)
+     * @property correctedAltitude 보정된 고도 (칼만 필터 노이즈 제거, null 가능)
+     * @property lastUpdated 마지막 업데이트 시간 (Unix timestamp, 초)
+     * @property heading GPS 이동 방향 (도, 0-359, 북쪽=0, null 가능)
+     * @property distanceCovered 누적 이동 거리 (미터)
+     * @property cumulativeTime 총 소요 시간 (초)
      */
     data class LocationData(
         val userId: Long,
@@ -94,19 +166,47 @@ class GpxService(
     )
 
     /**
-     * 웨이포인트 통과 감지 로직
-     *
-     * 이전 위치와 현재 위치를 비교하여 체크포인트 경계를 통과했는지 확인합니다.
+     * ================================ 체크포인트 통과 감지 핵심 로직 ================================
+     * 
+     * **비즈니스 목적:**
+     * 마라톤 참가자가 코스 상의 체크포인트를 정확히 통과했는지 실시간으로 감지하여
+     * 구간별 기록 측정 및 순위 계산의 기준점을 제공합니다.
+     * 
+     * **감지 알고리즘:**
+     * 1. **경계 교차 감지**: 이전 위치에서 현재 위치로 이동하면서 체크포인트 반경을 통과했는지 확인
+     *    - 이전 위치: 체크포인트 반경(30m) 밖
+     *    - 현재 위치: 체크포인트 반경(30m) 안
+     *    - 단순히 반경 안에 있는 것이 아니라 '경계를 통과'해야 통과로 인정
+     * 
+     * 2. **중복 통과 방지**: Redis에서 해당 체크포인트 통과 이력 확인
+     *    - 이미 통과한 체크포인트는 재통과로 인정하지 않음
+     *    - 참가자가 같은 지점을 여러 번 지나가더라도 첫 통과만 기록
+     * 
+     * 3. **정확한 통과 시점 기록**: GPS 수신 시점을 기준으로 통과 시간 기록
+     *    - Unix timestamp 기반 정확한 시간 기록
+     *    - 구간별 소요 시간 계산의 기준점 제공
+     * 
+     * **처리 과정:**
+     * STEP 1: Redis에서 이전 위치 조회
+     * STEP 2: GPX 파싱 데이터에서 체크포인트 정보 로드
+     * STEP 3: 각 체크포인트별로 통과 여부 검사
+     * STEP 4: 경계 교차 및 중복 검사
+     * STEP 5: 새로 통과한 체크포인트 목록 반환
+     * 
+     * **중요 제약사항:**
+     * - 체크포인트 인식 반경: 30미터 (CHECKPOINT_CROSSING_THRESHOLD)
+     * - 체크포인트 타입: start, checkpoint, finish만 인식
+     * - 순서 무관: 체크포인트를 순서대로 통과하지 않아도 인정 (다양한 코스 상황 고려)
      *
      * @param userId 사용자 ID
-     * @param eventId 이벤트 ID
+     * @param eventId 이벤트 ID  
      * @param eventDetailId 이벤트 상세 ID
      * @param currentLat 현재 위도
      * @param currentLng 현재 경도
      * @param currentTime 현재 시간 (Unix Timestamp)
-     * @param routeProgress 경로 진행률 (0.0 ~ 1.0)
-     * @param distanceFromStart 시작점으로부터 거리 (미터)
-     * @return 새로 통과한 체크포인트 리스트
+     * @param routeProgress 경로 진행률 (0.0 ~ 1.0, 선택적)
+     * @param distanceFromStart 시작점으로부터 거리 (미터, 선택적)
+     * @return 새로 통과한 체크포인트 리스트 (CheckpointCrossing 객체들)
      */
     private fun detectCheckpointCrossings(
         userId: Long,
@@ -1120,6 +1220,53 @@ class GpxService(
         return emptyList()
     }
 
+    /**
+     * ================================ 실시간 GPS 위치 보정 핵심 메서드 ================================
+     * 
+     * 이 메서드는 전체 시스템의 핵심 비즈니스 로직으로, 다음과 같은 단계로 GPS 위치를 보정합니다:
+     * 
+     * **STEP 1: GPS 데이터 검증 및 준비**
+     * - 입력받은 GPS 데이터 유효성 검증
+     * - Redis에서 해당 이벤트의 코스 데이터 조회
+     * - 3차원 칼만 필터 인스턴스 초기화
+     * 
+     * **STEP 2: 순차적 GPS 필터링**
+     * - 각 GPS 포인트에 대해 칼만 필터 적용
+     * - GPS 정확도(accuracy)와 속도(speed)를 고려한 가중치 계산
+     * - 3차원 좌표(위도, 경도, 고도) 노이즈 제거
+     * 
+     * **STEP 3: 맵 매칭 (경로 스냅)**
+     * - 마지막(최신) GPS 포인트에 대해서만 맵 매칭 수행
+     * - 보간된 경로 포인트들과의 거리 및 방향 비교
+     * - 최적의 경로상 위치로 GPS 좌표 보정
+     * - 경로 진행률 및 시작점으로부터 거리 계산
+     * 
+     * **STEP 4: 체크포인트 통과 감지**
+     * - 이전 위치와 현재 위치 비교하여 체크포인트 경계 통과 여부 판정
+     * - 30미터 반경 내 체크포인트 감지
+     * - 중복 통과 방지 (이미 통과한 체크포인트 제외)
+     * - 구간 시간 및 누적 시간 계산
+     * 
+     * **STEP 5: 데이터 저장 및 업데이트**
+     * - Redis에 보정된 위치 정보 저장
+     * - 체크포인트 통과 기록 저장
+     * - 이전 위치 정보 업데이트 (다음 요청 시 사용)
+     * - 리더보드 Sorted Set 업데이트
+     * 
+     * **STEP 6: 보정 품질 평가**
+     * - GPS 신뢰도 계산 (정확도 및 속도 기반)
+     * - 칼만 필터 불확실성 측정
+     * - 보정 강도 계산 (원본 vs 보정 위치 차이)
+     * - 종합 품질 등급 결정 (EXCELLENT/GOOD/FAIR/POOR)
+     * 
+     * @param request GPS 위치 보정 요청 (userId, eventId, eventDetailId, gpsData 포함)
+     * @return 보정된 위치, 체크포인트 통과 정보, 매칭 품질 정보 포함한 응답
+     * 
+     * **핵심 알고리즘:**
+     * - 칼만 필터: 연속된 GPS 측정값의 노이즈 제거 및 정확도 향상
+     * - 맵 매칭: 거리 기반 + 방향 기반 매칭으로 경로상 최적 위치 탐색
+     * - 체크포인트 감지: 이전-현재 위치의 경계 교차 여부로 정확한 통과 시점 판정
+     */
     @Transactional(readOnly = true)
     fun correctLocation(request: CorrectLocationRequestDto): CorrectLocationResponseDto {
         logger.info("위치 보정 요청: userId=${request.userId}, eventDetailId=${request.eventDetailId}, GPS 포인트 수=${request.gpsData.size}")
@@ -1541,17 +1688,41 @@ class GpxService(
     }
 
     /**
-     * 보정된 위치 정보를 Redis에 업데이트
-     *
+     * ================================ GPS 위치 및 추가 정보 Redis 저장 ================================
+     * 
+     * **저장되는 GPS 데이터:**
+     * 1. **원본 GPS 정보**
+     *    - 위도/경도: GPS 센서에서 직접 수신한 원본 좌표
+     *    - 고도: GPS 센서 고도값 (해수면 기준 미터)
+     *    - 정확도: GPS 신호 정확도 (미터, 작을수록 정확)
+     *    - 속도: GPS 센서 속도 (km/h 또는 m/s)
+     *    - 방향: GPS 이동 방향 (도, 0-359)
+     *    - 수신 시간: Unix timestamp
+     * 
+     * 2. **보정된 GPS 정보**
+     *    - 위도/경도: 칼만 필터 + 맵 매칭으로 보정된 좌표
+     *    - 고도: 칼만 필터로 노이즈 제거된 고도
+     *    - 이동 거리: 누적 이동 거리 (미터)
+     *    - 누적 시간: 총 소요 시간 (초)
+     * 
+     * 3. **추가 메타 정보**
+     *    - 마지막 업데이트 시간
+     *    - 시작점으로부터 직선 거리
+     * 
+     * **Redis 저장 구조: Hash**
+     * - Key: location:{userId}:{eventDetailId}
+     * - Fields: 각종 GPS 및 보정 정보
+     * - TTL: 24시간
+     * 
      * @param userId 사용자 ID
      * @param eventId 이벤트 ID
      * @param eventDetailId 이벤트 상세 ID
-     * @param rawGpsData 원본 GPS 데이터
+     * @param rawGpsData 원본 GPS 데이터 (위도, 경도, 고도, 정확도, 속도, 방향 포함)
      * @param correctedLat 보정된 위도
      * @param correctedLng 보정된 경도
-     * @param correctedAlt 보정된 고도
-     * @param timestamp 타임스탬프
-     * @param distanceFromStart 시작점으로부터 거리
+     * @param correctedAlt 보정된 고도 (칼만 필터 적용)
+     * @param timestamp 타임스탬프 (Unix seconds)
+     * @param distanceFromStart 시작점으로부터 거리 (미터)
      */
     private fun updateCorrectedLocationInRedis(
         userId: Long,
@@ -1615,34 +1786,53 @@ class GpxService(
                 cumulativeTime = cumulativeTime
             )
 
-            // Redis Hash에 저장
+            // Redis Hash에 GPS 데이터 저장 (원본 + 보정된 정보)
             val hashOps = redisTemplate.opsForHash<String, String>()
+            
+            // 기본 식별 정보
             hashOps.put(redisKey, "userId", locationData.userId.toString())
             hashOps.put(redisKey, "eventId", locationData.eventId.toString())
             hashOps.put(redisKey, "eventDetailId", locationData.eventDetailId.toString())
+            
+            // 원본 GPS 데이터 (센서에서 직접 수신한 값들)
             hashOps.put(redisKey, "rawLatitude", locationData.rawLatitude.toString())
             hashOps.put(redisKey, "rawLongitude", locationData.rawLongitude.toString())
             hashOps.put(redisKey, "rawAltitude", locationData.rawAltitude?.toString() ?: "null")
             hashOps.put(redisKey, "rawAccuracy", locationData.rawAccuracy?.toString() ?: "null")
-            hashOps.put(redisKey, "rawTime", locationData.rawTime.toString())
             hashOps.put(redisKey, "rawSpeed", locationData.rawSpeed?.toString() ?: "null")
+            hashOps.put(redisKey, "rawTime", locationData.rawTime.toString())
+            hashOps.put(redisKey, "heading", locationData.heading?.toString() ?: "null")
+            
+            // 보정된 GPS 데이터 (칼만 필터 + 맵 매칭 적용)
             hashOps.put(redisKey, "correctedLatitude", locationData.correctedLatitude.toString())
             hashOps.put(redisKey, "correctedLongitude", locationData.correctedLongitude.toString())
             hashOps.put(redisKey, "correctedAltitude", locationData.correctedAltitude?.toString() ?: "null")
-            hashOps.put(redisKey, "lastUpdated", locationData.lastUpdated.toString())
-            hashOps.put(redisKey, "heading", locationData.heading?.toString() ?: "null")
+            
+            // 계산된 메타 정보
             hashOps.put(redisKey, "distanceCovered", locationData.distanceCovered.toString())
             hashOps.put(redisKey, "cumulativeTime", locationData.cumulativeTime.toString())
+            hashOps.put(redisKey, "distanceFromStart", distanceFromStart?.toString() ?: "null")
+            hashOps.put(redisKey, "lastUpdated", locationData.lastUpdated.toString())
 
             // TTL 설정 (24시간)
             redisTemplate.expire(redisKey, 24, java.util.concurrent.TimeUnit.HOURS)
 
             logger.info(
-                "보정 위치 Redis 업데이트 완료: userId=$userId, eventDetailId=$eventDetailId, " +
-                        "원본위치=(${rawGpsData.lat}, ${rawGpsData.lng}), " +
-                        "보정위치=($correctedLat, $correctedLng), " +
+                "보정 위치 Redis 업데이트 완료: userId=$userId, eventDetailId=$eventDetailId"
+            )
+            logger.info(
+                "- 원본 GPS: 위치=(${String.format("%.6f", rawGpsData.lat)}, ${String.format("%.6f", rawGpsData.lng)}), " +
+                        "고도=${rawGpsData.altitude?.let { String.format("%.2f", it) } ?: "null"}m, " +
+                        "속도=${rawGpsData.speed?.let { String.format("%.2f", it) } ?: "null"}km/h, " +
+                        "정확도=${rawGpsData.accuracy?.let { String.format("%.1f", it) } ?: "null"}m, " +
+                        "방향=${rawGpsData.bearing?.let { String.format("%.0f", it) } ?: "null"}°"
+            )
+            logger.info(
+                "- 보정 결과: 위치=(${String.format("%.6f", correctedLat)}, ${String.format("%.6f", correctedLng)}), " +
+                        "고도=${correctedAlt?.let { String.format("%.2f", it) } ?: "null"}m, " +
                         "이동거리=${String.format("%.2f", distanceCovered)}m, " +
-                        "누적시간=${cumulativeTime}초"
+                        "누적시간=${cumulativeTime}초, " +
+                        "시작점거리=${distanceFromStart?.let { String.format("%.2f", it) } ?: "null"}m"
             )
 
             // 리더보드 Sorted Set 업데이트
@@ -1675,12 +1865,22 @@ class GpxService(
     }
 
     /**
-     * Redis에서 보정된 위치 정보 조회
-     *
+     * ================================ Redis GPS 위치 정보 조회 ================================
+     * 
+     * **조회되는 GPS 데이터:**
+     * - 원본 GPS: 위도, 경도, 고도, 정확도, 속도, 방향, 수신시간
+     * - 보정 GPS: 위도, 경도, 고도 (칼만 필터 + 맵 매칭 적용)
+     * - 계산 정보: 이동거리, 누적시간, 시작점거리, 마지막 업데이트
+     * 
+     * **Redis 구조:**
+     * - Key: location:{userId}:{eventDetailId}
+     * - Type: Hash
+     * - Fields: 각종 GPS 및 보정 데이터
+     * 
      * @param userId 사용자 ID
      * @param eventId 이벤트 ID
      * @param eventDetailId 이벤트 상세 ID
-     * @return 위치 데이터 또는 null
+     * @return 위치 데이터 (LocationData) 또는 null (데이터 없음)
      */
     private fun getCorrectedLocationFromRedis(
         userId: Long,
@@ -1695,10 +1895,11 @@ class GpxService(
             val data = hashOps.entries(redisKey)
 
             if (data.isEmpty()) {
+                logger.debug("Redis에서 위치 데이터 없음: userId=$userId, eventDetailId=$eventDetailId")
                 return null
             }
 
-            LocationData(
+            val locationData = LocationData(
                 userId = data["userId"]?.toLongOrNull() ?: userId,
                 eventId = data["eventId"]?.toLongOrNull() ?: eventId,
                 eventDetailId = data["eventDetailId"]?.toLongOrNull() ?: eventDetailId,
@@ -1716,6 +1917,14 @@ class GpxService(
                 distanceCovered = data["distanceCovered"]?.toDoubleOrNull() ?: 0.0,
                 cumulativeTime = data["cumulativeTime"]?.toLongOrNull() ?: 0L
             )
+
+            logger.debug(
+                "Redis에서 위치 데이터 조회 성공: userId=$userId, eventDetailId=$eventDetailId" +
+                        " - 원본GPS: 속도=${locationData.rawSpeed}km/h, 고도=${locationData.rawAltitude}m" +
+                        " - 보정GPS: 고도=${locationData.correctedAltitude}m, 이동거리=${locationData.distanceCovered}m"
+            )
+
+            locationData
 
         } catch (e: Exception) {
             logger.error("보정 위치 Redis 조회 실패: userId=$userId, eventDetailId=$eventDetailId", e)

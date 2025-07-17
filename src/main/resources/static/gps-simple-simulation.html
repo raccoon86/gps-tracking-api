@@ -76,6 +76,9 @@
       </button>
       <button id="uploadGpxBtn" class="btn setup">3. GPX 업로드</button>
       <button id="loadGpxBtn" class="btn setup">4. GPX 데이터 로드</button>
+      <button id="createParticipantsBtn" class="btn setup">
+        5. 테스트 참가자 생성
+      </button>
       <br />
       <button id="startBtn" class="btn">시뮬레이션 시작</button>
       <button id="stopBtn" class="btn stop">시뮬레이션 중지</button>
@@ -368,6 +371,46 @@
         }
       }
 
+      async function createTestParticipants() {
+        log("👥 테스트 참가자 생성 중...");
+
+        // 생성할 참가자 수 (기본 50명, 최대 1000명)
+        const participantCount = 50;
+
+        const requestBody = {
+          eventId: EVENT_ID,
+          eventDetailId: EVENT_DETAIL_ID,
+          count: participantCount,
+        };
+
+        log(
+          `📤 참가자 생성 요청: <pre>${JSON.stringify(
+            requestBody,
+            null,
+            2
+          )}</pre>`
+        );
+
+        try {
+          const res = await fetch("/api/participants/test/create", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(requestBody),
+          });
+          const resText = await res.text();
+          log(
+            `📥 <b>테스트 참가자 생성</b> 응답: <b>${res.status} ${res.statusText}</b><br><pre>${resText}</pre>`
+          );
+          if (res.ok) {
+            log(`✅ 테스트 참가자 ${participantCount}명 생성 완료!`);
+          }
+        } catch (e) {
+          log(`❌ 테스트 참가자 생성 오류: ${e.message}`);
+        }
+      }
+
       // API에서 GPX 파싱 데이터 로드
       async function loadGpxPointsFromApi() {
         log("📡 Redis에서 GPX 데이터 로드 중...");
@@ -490,6 +533,8 @@
       document.getElementById("createCourseBtn").onclick = createTestCourse;
       document.getElementById("uploadGpxBtn").onclick = uploadTestGpx;
       document.getElementById("loadGpxBtn").onclick = loadGpxPointsFromApi;
+      document.getElementById("createParticipantsBtn").onclick =
+        createTestParticipants;
       document.getElementById("startBtn").onclick = startSimulation;
       document.getElementById("stopBtn").onclick = stopSimulation;
 

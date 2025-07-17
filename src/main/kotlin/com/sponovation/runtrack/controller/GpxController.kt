@@ -1548,29 +1548,6 @@ class GpxController(
         }
     }
 
-    @GetMapping("/redis/{eventId}/{eventDetailId}")
-    @Operation(
-        summary = "Redis에 저장된 GPX 파싱 데이터 조회",
-        description = "gpx:{eventId}:{eventDetailId} 키의 GPX 파싱 데이터를 직접 조회합니다."
-    )
-    fun getGpxParsingDataFromRedis(
-        @Parameter(description = "이벤트 ID", required = true)
-        @PathVariable eventId: Long,
-        @Parameter(description = "이벤트 상세 ID", required = true)
-        @PathVariable eventDetailId: Long
-    ): ResponseEntity<Any> {
-        return try {
-            val gpxParsingData = gpxParsingRedisService.getGpxParsingData(eventId, eventDetailId)
-            if (gpxParsingData.success && gpxParsingData.points.isNotEmpty()) {
-                ResponseEntity.ok(ApiResponse(data = gpxParsingData))
-            } else {
-                ResponseEntity.notFound().build()
-            }
-        } catch (e: Exception) {
-            logger.error("GPX 파싱 데이터 조회 실패: eventId=$eventId, eventDetailId=$eventDetailId", e)
-            ResponseEntity.internalServerError().build()
-        }
-    }
 
     @GetMapping("/location/all/{eventDetailId}")
     @Operation(

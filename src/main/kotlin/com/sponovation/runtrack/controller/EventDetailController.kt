@@ -2,6 +2,7 @@ package com.sponovation.runtrack.controller
 
 import com.sponovation.runtrack.dto.EventDetailRequestDto
 import com.sponovation.runtrack.service.EventDetailService
+import com.sponovation.runtrack.service.GpxParsingRedisService
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.Parameter
 import io.swagger.v3.oas.annotations.tags.Tag
@@ -37,7 +38,8 @@ import com.sponovation.runtrack.common.ErrorResponse
 class EventDetailController(
     private val eventDetailService: EventDetailService,
     private val eventRepository: EventRepository,
-    private val eventDetailRepository: EventDetailRepository
+    private val eventDetailRepository: EventDetailRepository,
+    private val gpxParsingRedisService: GpxParsingRedisService
 ) {
     
     private val logger = LoggerFactory.getLogger(EventDetailController::class.java)
@@ -75,9 +77,11 @@ class EventDetailController(
             - courseCategory: 코스 카테고리 목록 (거리별 분류)
             - gpxFile: GPX 파일 S3 URL
             - participantsLocations: 지도 마커로 표시될 참가자 위치 데이터
-              * 1~3위 유저의 위치 데이터
-              * 현재 로그인 사용자 위치 데이터 (중복 제거)
-              * 트래커 목록 유저 위치 데이터 (향후 구현)
+              * **참가자 정보**: userId, name, profileUrl, bibNumber (Participant 테이블)
+              * **위치 정보**: latitude, longitude (보정된 GPS 좌표)
+              * **GPS 센서 데이터**: speed (속도), rawAltitude (원본 고도), altitude (보정된 고도)
+              * **추가 정보**: heading (방향), distanceCovered (이동거리), cumulativeTime (소요시간)
+              * **대상 유저**: 1~3위 + 현재 로그인 사용자 + 트래커 목록 유저
             - topRankers: 맵 하단에 표시될 상위 랭커 정보
               * 순위, 이름, 참가자 번호, 프로필 이미지 등 상세 정보
               * 완주 여부, 평균 속도, 누적 거리 등 통계 정보
@@ -104,7 +108,7 @@ class EventDetailController(
         @NotNull(message = "이벤트 상세 ID는 필수입니다")
         @Positive(message = "이벤트 상세 ID는 양수여야 합니다")
         eventDetailId: Long,
-        
+
         @Parameter(description = "현재 로그인한 사용자 ID (선택사항)", example = "user123")
         @RequestParam(required = false)
         currentUserId: Long?
@@ -122,6 +126,14 @@ class EventDetailController(
             
             logger.info("대회 상세 조회 성공: eventId=$eventId, eventDetailId=$eventDetailId, " +
                 "참가자 위치 수=${eventDetail.participantsLocations.size}, 상위 랭커 수=${eventDetail.topRankers.size}")
+            
+            // GPS 센서 데이터 & 참가자 정보 포함 현황 로깅
+            val participantsWithSpeed = eventDetail.participantsLocations.count { it.speed != null }
+            val participantsWithAltitude = eventDetail.participantsLocations.count { it.altitude != null }
+            val participantsWithBibNumber = eventDetail.participantsLocations.count { !it.bibNumber.isNullOrBlank() }
+            val participantsWithProfile = eventDetail.participantsLocations.count { !it.profileUrl.isNullOrBlank() }
+            logger.info("데이터 포함 현황: 속도=${participantsWithSpeed}명, 고도=${participantsWithAltitude}명, " +
+                "배번=${participantsWithBibNumber}명, 프로필=${participantsWithProfile}명")
             
             ResponseEntity.ok(ApiResponse(data = eventDetail))
             
@@ -182,9 +194,17 @@ class EventDetailController(
                 currentUserId = 1
             )
 
-            logger.info("대회 상세 조회 성공 (POST): eventId= {request.eventId}, " +
-                "eventDetailId= {request.eventDetailId}, 참가자 위치 수= {eventDetail.participantsLocations.size}, " +
-                "상위 랭커 수= {eventDetail.topRankers.size}")
+            logger.info("대회 상세 조회 성공 (POST): eventId=${request.eventId}, " +
+                "eventDetailId=${request.eventDetailId}, 참가자 위치 수=${eventDetail.participantsLocations.size}, " +
+                "상위 랭커 수=${eventDetail.topRankers.size}")
+
+            // GPS 센서 데이터 & 참가자 정보 포함 현황 로깅 (POST)
+            val participantsWithSpeed = eventDetail.participantsLocations.count { it.speed != null }
+            val participantsWithAltitude = eventDetail.participantsLocations.count { it.altitude != null }
+            val participantsWithBibNumber = eventDetail.participantsLocations.count { !it.bibNumber.isNullOrBlank() }
+            val participantsWithProfile = eventDetail.participantsLocations.count { !it.profileUrl.isNullOrBlank() }
+            logger.info("데이터 포함 현황 (POST): 속도=${participantsWithSpeed}명, 고도=${participantsWithAltitude}명, " +
+                "배번=${participantsWithBibNumber}명, 프로필=${participantsWithProfile}명")
 
             ResponseEntity.ok(ApiResponse(data = eventDetail))
             
@@ -260,6 +280,30 @@ class EventDetailController(
             ResponseEntity.ok(response)
         } catch (e: Exception) {
             logger.error("이벤트 및 이벤트 상세 정보 조회 실패: eventId=$eventId", e)
+            ResponseEntity.internalServerError().build()
+        }
+    }
+
+    @GetMapping("/gpx/{eventId}/{eventDetailId}")
+    @Operation(
+        summary = "Redis에 저장된 GPX 파싱 데이터 조회",
+        description = "gpx:{eventId}:{eventDetailId} 키의 GPX 파싱 데이터를 직접 조회합니다."
+    )
+    fun getGpxParsingDataFromRedis(
+        @Parameter(description = "이벤트 ID", required = true)
+        @PathVariable eventId: Long,
+        @Parameter(description = "이벤트 상세 ID", required = true)
+        @PathVariable eventDetailId: Long
+    ): ResponseEntity<Any> {
+        return try {
+            val gpxParsingData = gpxParsingRedisService.getGpxParsingData(eventId, eventDetailId)
+            if (gpxParsingData.success && gpxParsingData.points.isNotEmpty()) {
+                ResponseEntity.ok(ApiResponse(data = gpxParsingData))
+            } else {
+                ResponseEntity.notFound().build()
+            }
+        } catch (e: Exception) {
+            logger.error("GPX 파싱 데이터 조회 실패: eventId=$eventId, eventDetailId=$eventDetailId", e)
             ResponseEntity.internalServerError().build()
         }
     }

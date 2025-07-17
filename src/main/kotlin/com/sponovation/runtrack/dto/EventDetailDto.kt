@@ -90,36 +90,53 @@ data class CourseCategoryDto(
 
 /**
  * 이벤트 참가자 위치 DTO
+ * 
+ * 참가자의 실시간 GPS 위치 정보를 담는 데이터 전송 객체입니다.
+ * 원본 GPS 데이터와 보정된 위치 정보를 모두 포함하여 
+ * 클라이언트에서 다양한 용도로 활용할 수 있도록 합니다.
+ * 
+ * **포함 정보:**
+ * 1. 원본 GPS 데이터: rawAltitude, rawSpeed (센서 직접 수신값)
+ * 2. 보정된 위치: correctedLatitude, correctedLongitude, correctedAltitude
+ * 3. 계산된 정보: distanceCovered, cumulativeTime, heading
  */
 @Schema(description = "이벤트 참가자 위치 정보")
 data class EventParticipantLocationDto(
-    @Schema(description = "사용자 ID", example = "userXYZ")
+    @Schema(description = "사용자 ID", example = "1")
     @JsonProperty("userId")
     val userId: Long,
 
-    @Schema(description = "보정된 위도", example = "37.5668")
-    @JsonProperty("correctedLatitude")
-    val correctedLatitude: Double,
+    @Schema(description = "참가자 이름", example = "김러너")
+    @JsonProperty("name")
+    val name: String,
 
-    @Schema(description = "보정된 경도", example = "126.9786")
-    @JsonProperty("correctedLongitude")
-    val correctedLongitude: Double,
+    @Schema(description = "프로필 이미지 URL", example = "https://example.com/profile.jpg")
+    @JsonProperty("profileUrl")
+    val profileUrl: String? = null,
 
-    @Schema(description = "보정된 고도", example = "50.5")
-    @JsonProperty("correctedAltitude")
-    val correctedAltitude: Double? = null,
+    @Schema(description = "배번", example = "A001")
+    @JsonProperty("bibNumber")
+    val bibNumber: String? = null,
 
-    @Schema(description = "진행 방향", example = "45.2")
-    @JsonProperty("heading")
-    val heading: Double? = null,
+    @Schema(description = "위도 (보정된 좌표)", example = "35.964090207988626")
+    @JsonProperty("latitude")
+    val latitude: Double,
 
-    @Schema(description = "주행 거리 (미터)", example = "1200.5")
+    @Schema(description = "경도 (보정된 좌표)", example = "126.74784739855649")
+    @JsonProperty("longitude")
+    val longitude: Double,
+
+    @Schema(description = "고도 (보정된 값)", example = "10")
+    @JsonProperty("altitude")
+    val altitude: Double? = null,
+
+    @Schema(description = "속도 (m/s)", example = "2.8367636")
+    @JsonProperty("speed")
+    val speed: Float? = null,
+
+    @Schema(description = "누적 이동 거리 (미터)", example = "1200.5")
     @JsonProperty("distanceCovered")
     val distanceCovered: Double? = null,
-
-    @Schema(description = "누적 시간 (포맷)", example = "00:25:30")
-    @JsonProperty("cumulativeTime")
-    val cumulativeTime: String? = null
 )
 
 /**
@@ -146,28 +163,4 @@ data class TopRankerDto(
     @Schema(description = "프로필 이미지 URL", example = "http://example.com/profile/official1.jpg")
     @JsonProperty("profileImageUrl")
     val profileImageUrl: String? = null,
-
-    @Schema(description = "가장 최근 체크포인트 ID", example = "FINISH")
-    @JsonProperty("farthestCpId")
-    val farthestCpId: String? = null,
-
-    @Schema(description = "가장 최근 체크포인트 인덱스", example = "5")
-    @JsonProperty("farthestCpIndex")
-    val farthestCpIndex: Int? = null,
-
-    @Schema(description = "가장 최근 체크포인트까지의 누적 시간", example = "00:40:15")
-    @JsonProperty("cumulativeTimeAtFarthestCp")
-    val cumulativeTimeAtFarthestCp: String? = null,
-
-    @Schema(description = "누적 거리 (미터)", example = "10000.0")
-    @JsonProperty("cumulativeDistance")
-    val cumulativeDistance: Double? = null,
-
-    @Schema(description = "평균 속도 (m/min)", example = "248.8")
-    @JsonProperty("averageSpeed")
-    val averageSpeed: Double? = null,
-
-    @Schema(description = "완주 여부", example = "true")
-    @JsonProperty("isFinished")
-    val isFinished: Boolean = false
 )
