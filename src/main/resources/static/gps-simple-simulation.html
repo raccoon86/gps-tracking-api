@@ -58,12 +58,27 @@
       .btn.stop:active {
         background: #991b1b;
       }
+      .btn.setup {
+        background: #059669;
+      }
+      .btn.setup:active {
+        background: #047857;
+      }
     </style>
   </head>
   <body>
     <div style="text-align: center">
-      <button id="startBtn" class="btn">시작</button>
-      <button id="stopBtn" class="btn stop">중지</button>
+      <button id="createEventBtn" class="btn setup">
+        1. 테스트 이벤트 생성
+      </button>
+      <button id="createCourseBtn" class="btn setup">
+        2. 테스트 코스 생성
+      </button>
+      <button id="uploadGpxBtn" class="btn setup">3. GPX 업로드</button>
+      <button id="loadGpxBtn" class="btn setup">4. GPX 데이터 로드</button>
+      <br />
+      <button id="startBtn" class="btn">시뮬레이션 시작</button>
+      <button id="stopBtn" class="btn stop">시뮬레이션 중지</button>
     </div>
     <div id="map"></div>
     <div id="logArea" class="log-area"></div>
@@ -78,27 +93,28 @@
         { userId: 4, name: "최러닝", color: "#ffaa44" },
         { userId: 5, name: "정트랙", color: "#aa44ff" },
       ];
-      const GPX_POINTS = [
-        [37.5413553485092, 127.115719020367],
-        [37.5390881874808, 127.114029228687],
-        [37.5379482005428, 127.113452553749],
-        [37.5353682776934, 127.11048334837],
-        [37.5351258071487, 127.110266089439],
-        [37.5344154064531, 127.109783291817],
-        [37.5337836971563, 127.109482884407],
-        [37.5320799696497, 127.108764052391],
-        [37.5317162475003, 127.108696997166],
-        [37.5315503385624, 127.108699679375],
-        [37.5301273352067, 127.107908427715],
-        [37.5301188268838, 127.107884287834],
-        [37.5266260783458, 127.1042740345],
-        [37.5258773070672, 127.104005813599],
-        [37.5255709893779, 127.103651762009],
-        [37.5252731793075, 127.102814912796],
-        [37.5235713846696, 127.101398706436],
+      // GPX_POINTS 배열 - API에서 로드되는 실제 경로 좌표 (군산새만금 마라톤 코스)
+      let GPX_POINTS = [
+        [35.9640808249908, 126.747851371765],
+        [35.96364172472, 126.747975850981],
+        [35.963202615667, 126.748100332687],
+        [35.9628129854974, 126.748210787773],
+        [35.962767610287, 126.748182757576],
+        [35.9627391722972, 126.74816519022],
+        [35.9626566751093, 126.747719943523],
+        [35.962645912271, 126.747662983527],
+        [35.962543896985, 126.747123089669],
+        [35.9624418817, 126.746583195811],
+        [35.9623657632854, 126.746180355549],
+        [35.962347531011, 126.746041447806],
+        [35.9623266854961, 126.745882630348],
+        [35.962301548688, 126.74549043814],
+        [35.962266132876, 126.744937869749],
+        [35.962230717064, 126.744385301357],
+        [35.962195301252, 126.743832732966],
       ];
       const EVENT_ID = 1;
-      const EVENT_DETAIL_ID = 100;
+      const EVENT_DETAIL_ID = 1;
       const API_URL = "/api/v1/gpx/correct-location";
       const GPS_ERROR_METERS = 5;
       const INTERVAL_SECONDS = 10;
@@ -276,12 +292,221 @@
         logArea.innerHTML = entry + logArea.innerHTML;
       }
 
-      // 6. 버튼 이벤트
+      // 6. 초기 설정 API 호출 함수들
+      async function createTestEvent() {
+        log("🏃 테스트 이벤트 생성 중...");
+        try {
+          const url = `/api/v1/gpx/create-test-event?eventId=${EVENT_ID}&name=테스트 이벤트`;
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+          });
+          const resText = await res.text();
+          log(
+            `📥 <b>테스트 이벤트 생성</b> 응답: <b>${res.status} ${res.statusText}</b><br><pre>${resText}</pre>`
+          );
+          if (res.ok) {
+            log("✅ 테스트 이벤트 생성 완료!");
+          }
+        } catch (e) {
+          log(`❌ 테스트 이벤트 생성 오류: ${e.message}`);
+        }
+      }
+
+      async function createTestCourse() {
+        log("🏁 테스트 코스 생성 중...");
+        try {
+          const url = `/api/v1/gpx/create-test-course?eventId=${EVENT_ID}&courseName=테스트 코스`;
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+          });
+          const resText = await res.text();
+          log(
+            `📥 <b>테스트 코스 생성</b> 응답: <b>${res.status} ${res.statusText}</b><br><pre>${resText}</pre>`
+          );
+          if (res.ok) {
+            log("✅ 테스트 코스 생성 완료!");
+          }
+        } catch (e) {
+          log(`❌ 테스트 코스 생성 오류: ${e.message}`);
+        }
+      }
+
+      async function uploadTestGpx() {
+        log("📂 GPX 파일 업로드 중...");
+
+        // GPX 포인트를 GPX 형식 문자열로 변환
+        const gpxContent = generateGpxContent();
+
+        // FormData로 파일 업로드 준비
+        const formData = new FormData();
+        const gpxBlob = new Blob([gpxContent], { type: "application/gpx+xml" });
+        formData.append("file", gpxBlob, "test_route.gpx");
+        formData.append("eventId", EVENT_ID);
+        formData.append("userId", "1");
+        formData.append("eventDetailId", EVENT_DETAIL_ID);
+        formData.append("routeName", "테스트 경로");
+        formData.append("description", "GPS 시뮬레이션용 테스트 경로");
+
+        try {
+          const res = await fetch("/api/v1/gpx/upload-gpx", {
+            method: "POST",
+            body: formData,
+          });
+          const resText = await res.text();
+          log(
+            `📥 <b>GPX 업로드</b> 응답: <b>${res.status} ${res.statusText}</b><br><pre>${resText}</pre>`
+          );
+          if (res.ok) {
+            log("✅ GPX 파일 업로드 완료!");
+            // 업로드 성공 후 GPX 데이터 다시 로드
+            await loadGpxPointsFromApi();
+          }
+        } catch (e) {
+          log(`❌ GPX 업로드 오류: ${e.message}`);
+        }
+      }
+
+      // API에서 GPX 파싱 데이터 로드
+      async function loadGpxPointsFromApi() {
+        log("📡 Redis에서 GPX 데이터 로드 중...");
+
+        try {
+          const res = await fetch(
+            `/api/v1/gpx/redis/${EVENT_ID}/${EVENT_DETAIL_ID}`,
+            {
+              method: "GET",
+              headers: {
+                "Content-Type": "application/json",
+              },
+            }
+          );
+
+          const result = await res.json();
+          log(
+            `📡 <b>GPX 데이터 로드</b> 응답: <b>${res.status} ${res.statusText}</b>`
+          );
+
+          if (
+            res.ok &&
+            result.data &&
+            result.data.success &&
+            result.data.points
+          ) {
+            const points = result.data.points;
+            log(`✅ GPX 데이터 로드 성공! (${points.length}개 포인트)`);
+
+            // GPX_POINTS 배열 업데이트
+            GPX_POINTS = points.map((point) => [
+              point.latitude,
+              point.longitude,
+            ]);
+            log(
+              `🔄 GPX_POINTS 업데이트 완료 (처음 3개: ${JSON.stringify(
+                GPX_POINTS.slice(0, 3)
+              )})`
+            );
+
+            // 지도 업데이트
+            updateMapWithNewPoints();
+
+            return true;
+          } else {
+            log("⚠️ GPX 데이터가 없습니다. 먼저 GPX 파일을 업로드해주세요.");
+            return false;
+          }
+        } catch (e) {
+          log(`❌ GPX 데이터 로드 오류: ${e.message}`);
+          return false;
+        }
+      }
+
+      // 지도에 새로운 GPX 포인트 적용
+      function updateMapWithNewPoints() {
+        try {
+          // 기존 GPX 경로 레이어 제거
+          map.eachLayer(function (layer) {
+            if (
+              layer instanceof L.Polyline &&
+              layer.options.color === "#2563eb"
+            ) {
+              map.removeLayer(layer);
+            }
+          });
+
+          // 새로운 GPX 경로 추가
+          L.polyline(GPX_POINTS, {
+            color: "#2563eb",
+            weight: 5,
+            opacity: 0.7,
+          }).addTo(map);
+
+          // 지도 뷰 조정
+          if (GPX_POINTS.length > 0) {
+            const bounds = L.latLngBounds(GPX_POINTS);
+            map.fitBounds(bounds, { padding: [20, 20] });
+          }
+
+          log("🗺️ 지도 업데이트 완료");
+        } catch (e) {
+          log(`❌ 지도 업데이트 오류: ${e.message}`);
+        }
+      }
+
+      // GPX 형식 문자열 생성 함수
+      function generateGpxContent() {
+        let gpxContent = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="GPS 시뮬레이션" 
+     xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd"
+     xmlns="http://www.topografix.com/GPX/1/1" 
+     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <metadata>
+    <name>테스트 루트</name>
+    <desc>GPS 시뮬레이션용 테스트 경로</desc>
+  </metadata>
+  <trk>
+    <name>Test Route</name>
+    <trkseg>
+`;
+
+        GPX_POINTS.forEach((point, index) => {
+          gpxContent += `      <trkpt lat="${point[0]}" lon="${point[1]}">
+        <ele>10.0</ele>
+        <time>${new Date(Date.now() + index * 1000).toISOString()}</time>
+      </trkpt>
+`;
+        });
+
+        gpxContent += `    </trkseg>
+  </trk>
+</gpx>`;
+
+        return gpxContent;
+      }
+
+      // 7. 버튼 이벤트
+      document.getElementById("createEventBtn").onclick = createTestEvent;
+      document.getElementById("createCourseBtn").onclick = createTestCourse;
+      document.getElementById("uploadGpxBtn").onclick = uploadTestGpx;
+      document.getElementById("loadGpxBtn").onclick = loadGpxPointsFromApi;
       document.getElementById("startBtn").onclick = startSimulation;
       document.getElementById("stopBtn").onclick = stopSimulation;
 
-      // 7. 초기화
-      window.onload = initMap;
+      // 8. 초기화
+      window.onload = async function () {
+        initMap();
+        log("🚀 GPS 시뮬레이션 초기화 완료");
+
+        // 페이지 로드 시 자동으로 GPX 데이터 로드 시도
+        log("🔄 기존 GPX 데이터 자동 로드 중...");
+        const loaded = await loadGpxPointsFromApi();
+        if (!loaded) {
+          log(
+            "📌 GPX 데이터가 없습니다. 설정 버튼을 순서대로 클릭하여 테스트 환경을 준비하세요."
+          );
+        }
+      };
     </script>
   </body>
 </html>

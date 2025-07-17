@@ -418,32 +418,11 @@ class GpxController(
     fun createTestCourse(
         @Parameter(description = "Event ID", required = true)
         @RequestParam("eventId") eventId: Long,
-        @Parameter(description = "EventDetail ID", required = true)
-        @RequestParam("eventDetailId") eventDetailId: Long,
         @Parameter(description = "코스 이름", required = true)
         @RequestParam("courseName") courseName: String
     ): ResponseEntity<Any> {
 
         return try {
-            logger.info("테스트 EventDetail 생성 시작: eventId=$eventId, eventDetailId=$eventDetailId, courseName=$courseName")
-
-            // 이미 존재하는 EventDetail인지 확인
-            val existingEventDetail = eventDetailRepository.findById(eventDetailId)
-            if (existingEventDetail.isPresent) {
-                logger.info("이미 존재하는 EventDetail 반환: eventDetailId=$eventDetailId")
-                val eventDetail = existingEventDetail.get()
-                val response = mapOf(
-                    "eventDetailId" to eventDetail.id,
-                    "eventId" to eventDetail.eventId,
-                    "distance" to eventDetail.distance,
-                    "course" to eventDetail.course,
-                    "gpxFile" to eventDetail.gpxFile,
-                    "createdAt" to eventDetail.createdAt.toString(),
-                    "message" to "기존 이벤트 상세 사용"
-                )
-                return ResponseEntity.ok(response)
-            }
-
             // EventDetail 생성
             val eventDetail = EventDetail(
                 eventId = eventId,
@@ -468,7 +447,7 @@ class GpxController(
             ResponseEntity.ok(ApiResponse(data = response))
 
         } catch (e: Exception) {
-            logger.error("테스트 EventDetail 생성 실패: eventId=$eventId, eventDetailId=$eventDetailId", e)
+            logger.error("테스트 EventDetail 생성 실패: eventId=$eventId", e)
             ResponseEntity.internalServerError().build()
         }
     }
@@ -591,12 +570,8 @@ class GpxController(
             )
 
             if (!parseResult.success) {
-                logger.error("GPX 파싱 및 Redis 저장 실패: ${parseResult.message}")
                 return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build()
             }
-
-            logger.info("GPX 파싱 및 Redis 저장 성공: 총 ${parseResult.totalPoints}개 포인트, 체크포인트 ${parseResult.checkpointCount}개")
-            logger.info("Redis 키: gpx:${eventId}:${eventDetailId}")
 
             // 2. 응답 생성
             val response = GpxUploadResponseDto(
