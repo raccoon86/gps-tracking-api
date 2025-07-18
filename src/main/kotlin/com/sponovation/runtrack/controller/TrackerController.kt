@@ -32,7 +32,7 @@ import org.springframework.web.bind.annotation.*
  */
 @Tag(name = "트래커 관리", description = "참가자 트래킹 관리 API")
 @RestController
-@RequestMapping("/api/trackers")
+@RequestMapping("/api/v1/trackers")
 class TrackerController(
     private val trackerService: TrackerService
 ) {

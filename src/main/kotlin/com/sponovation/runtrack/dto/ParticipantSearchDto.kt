@@ -15,6 +15,12 @@ data class ParticipantSearchRequestDto(
     @field:Positive(message = "이벤트 ID는 양수여야 합니다")
     val eventId: Long,
 
+    @Schema(description = "이벤트 상세 ID", example = "1", required = true)
+    @JsonProperty("eventDetailId")
+    @field:NotNull(message = "이벤트 상세 ID는 필수입니다")
+    @field:Positive(message = "이벤트 상세 ID는 양수여야 합니다")
+    val eventDetailId: Long?,
+
     @Schema(description = "참가자 이름 또는 배번으로 검색", example = "강감찬")
     @JsonProperty("search")
     @field:Size(max = 100, message = "검색어는 100자를 초과할 수 없습니다")
@@ -28,7 +34,12 @@ data class ParticipantSearchRequestDto(
 
     @Schema(description = "다음 페이지 커서", example = "F004_20250709120500")
     @JsonProperty("cursor")
-    val cursor: String? = null
+    val cursor: String? = null,
+
+    @Schema(description = "현재 사용자 ID (트래킹 목록 제외용)", example = "1")
+    @JsonProperty("userId")
+    @field:Positive(message = "사용자 ID는 양수여야 합니다")
+    val userId: Long? = null
 )
 
 /**
@@ -43,6 +54,10 @@ data class ParticipantSearchItemDto(
     @Schema(description = "참가자 이름", example = "강감찬")
     @JsonProperty("name")
     val name: String,
+
+    @Schema(description = "닉네임", example = "러너")
+    @JsonProperty("nickname")
+    val nickname: String?,
 
     @Schema(description = "배번", example = "M002")
     @JsonProperty("bibNumber")

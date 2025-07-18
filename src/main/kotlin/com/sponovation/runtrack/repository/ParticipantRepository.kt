@@ -60,6 +60,7 @@ interface ParticipantRepository : JpaRepository<Participant, Long> {
     """)
     fun searchParticipantsWithCursor(
         @Param("eventId") eventId: Long,
+        @Param("eventDetailId") eventDetailId: Long?,
         @Param("search") search: String?,
         @Param("cursorBibNumber") cursorBibNumber: String?,
         @Param("cursorCreatedAt") cursorCreatedAt: LocalDateTime?,

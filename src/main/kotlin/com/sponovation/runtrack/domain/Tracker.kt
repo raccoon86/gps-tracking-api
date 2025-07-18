@@ -30,8 +30,8 @@ import java.time.LocalDateTime
     name = "trackers",
     uniqueConstraints = [
         UniqueConstraint(
-            name = "uk_trackers_user_participant",
-            columnNames = ["user_id", "participant_id"]
+            name = "uk_trackers_user_event_event_detail_participant",
+            columnNames = ["user_id", "event_id", "event_detail_id", "participant_id"]
         )
     ]
 )
@@ -53,6 +53,24 @@ data class Tracker(
     @field:Positive(message = "사용자 ID는 양수여야 합니다")
     @Column(name = "user_id", nullable = false)
     val userId: Long,
+
+    /**
+     * 이벤트 ID (Foreign Key)
+     * 트래킹 대상이 되는 이벤트의 고유 식별자
+     */
+    @field:NotNull(message = "이벤트 ID는 필수입니다")
+    @field:Positive(message = "이벤트 ID는 양수여야 합니다")
+    @Column(name = "event_id", nullable = false)
+    val eventId: Long,
+
+    /**
+     * 이벤트 상세 ID (Foreign Key)
+     * 트래킹 대상이 되는 이벤트 상세의 고유 식별자
+     */
+    @field:NotNull(message = "이벤트 상세 ID는 필수입니다")
+    @field:Positive(message = "이벤트 상세 ID는 양수여야 합니다")
+    @Column(name = "event_detail_id", nullable = false)
+    val eventDetailId: Long,
 
     /**
      * 참가자 ID (Foreign Key)

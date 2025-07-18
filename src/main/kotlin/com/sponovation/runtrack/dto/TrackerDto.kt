@@ -15,6 +15,18 @@ data class AddTrackerRequestDto(
     @field:Positive(message = "사용자 ID는 양수여야 합니다")
     val userId: Long,
 
+    @Schema(description = "이벤트 ID", example = "1", required = true)
+    @JsonProperty("eventId")
+    @field:NotNull(message = "이벤트 ID는 필수입니다")
+    @field:Positive(message = "이벤트 ID는 양수여야 합니다")
+    val eventId: Long,
+
+    @Schema(description = "이벤트 상세 ID", example = "1", required = true)
+    @JsonProperty("eventDetailId")
+    @field:NotNull(message = "이벤트 상세 ID는 필수입니다")
+    @field:Positive(message = "이벤트 상세 ID는 양수여야 합니다")
+    val eventDetailId: Long,
+
     @Schema(description = "참가자 ID", example = "1", required = true)
     @JsonProperty("participantId")
     @field:NotNull(message = "참가자 ID는 필수입니다")
@@ -34,6 +46,10 @@ data class TrackerItemDto(
     @Schema(description = "참가자 이름", example = "강감찬")
     @JsonProperty("name")
     val name: String,
+
+    @Schema(description = "참가자 닉네임", example = "러닝마스터")
+    @JsonProperty("nickname")
+    val nickname: String?,
 
     @Schema(description = "배번", example = "M002")
     @JsonProperty("bibNumber")
@@ -68,6 +84,18 @@ data class RemoveTrackerRequestDto(
     @field:NotNull(message = "사용자 ID는 필수입니다")
     @field:Positive(message = "사용자 ID는 양수여야 합니다")
     val userId: Long,
+
+    @Schema(description = "이벤트 ID", example = "1", required = true)
+    @JsonProperty("eventId")
+    @field:NotNull(message = "이벤트 ID는 필수입니다")
+    @field:Positive(message = "이벤트 ID는 양수여야 합니다")
+    val eventId: Long,
+
+    @Schema(description = "이벤트 상세 ID", example = "1", required = true)
+    @JsonProperty("eventDetailId")
+    @field:NotNull(message = "이벤트 상세 ID는 필수입니다")
+    @field:Positive(message = "이벤트 상세 ID는 양수여야 합니다")
+    val eventDetailId: Long,
 
     @Schema(description = "참가자 ID", example = "1", required = true)
     @JsonProperty("participantId")

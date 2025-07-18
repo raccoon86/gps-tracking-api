@@ -28,7 +28,7 @@ import org.springframework.web.bind.annotation.*
  */
 @Tag(name = "참가자 관리", description = "참가자 CRUD 및 테스트 데이터 생성 API")
 @RestController
-@RequestMapping("/api/participants")
+@RequestMapping("/api/v1/participants")
 class ParticipantController(
     private val participantService: ParticipantService
 ) {
@@ -411,9 +411,11 @@ class ParticipantController(
      * 커서 기반 페이지네이션을 사용하여 일관된 결과를 보장합니다.
      * 
      * @param eventId 검색할 이벤트 ID
+     * @param eventDetailId 이벤트 상세 ID
      * @param search 검색어 (이름 또는 배번, 부분 일치 지원)
      * @param size 페이지 크기 (1-100 사이)
      * @param cursor 다음 페이지를 위한 커서 (배번_타임스탬프 형태)
+     * @param userId 현재 사용자 ID (제공 시 해당 사용자의 트래킹 목록에 있는 참가자는 검색 결과에서 제외)
      * @return 검색된 참가자 목록과 다음 페이지 커서
      * 
      * 커서 페이지네이션:
@@ -426,36 +428,47 @@ class ParticipantController(
      * - 이름: 부분 일치, 대소문자 무시
      * - 배번: 정확한 일치 또는 부분 일치
      * - 검색어가 없으면 전체 목록 반환
+     * 
+     * 트래킹 목록 제외:
+     * - userId가 제공되면 해당 사용자가 이미 트래킹 중인 참가자들은 검색 결과에서 제외
+     * - 중복 트래킹 방지를 위한 기능
      */
     @Operation(
         summary = "참가자 검색",
-        description = "이벤트별 참가자를 이름 또는 배번으로 검색합니다. 커서 기반 페이징을 사용합니다."
+        description = "이벤트별 참가자를 이름 또는 배번으로 검색합니다. 커서 기반 페이징을 사용하며, 현재 사용자의 트래킹 목록에 있는 참가자는 제외됩니다."
     )
-    @GetMapping("/search")
+    @GetMapping("")
     fun searchParticipants(
         @Parameter(description = "이벤트 ID")
         @RequestParam eventId: Long,
+        @Parameter(description = "이벤트 상세 ID")
+        @RequestParam(required = false) eventDetailId: Long?,
         @Parameter(description = "검색어 (이름 또는 배번)")
         @RequestParam(required = false) search: String?,
         @Parameter(description = "페이지 크기 (1-100)")
         @RequestParam(defaultValue = "20") size: Int,
         @Parameter(description = "다음 페이지 커서")
-        @RequestParam(required = false) cursor: String?
+        @RequestParam(required = false) cursor: String?,
+        @Parameter(description = "현재 사용자 ID (트래킹 목록 제외용)")
+        @RequestParam(required = false) userId: Long?
     ): ResponseEntity<Any> {
         return try {
             // 요청 파라미터들을 DTO로 구성
             val request = ParticipantSearchRequestDto(
                 eventId = eventId,
+                eventDetailId = eventDetailId,
                 search = search,
                 size = size,
-                cursor = cursor
+                cursor = cursor,
+                userId = userId
             )
             
             // 서비스에서 커서 기반 검색 수행
             val response = participantService.searchParticipants(request)
             
-            // 검색 성공 로그 (검색어와 결과 수 포함)
-            logger.info("참가자 검색 성공: eventId=$eventId, 검색어='$search', 결과=${response.participants.size}건")
+            // 검색 성공 로그 (검색어와 결과 수, 트래킹 제외 여부 포함)
+            val trackingExcluded = if (userId != null) " (트래킹 목록 제외됨)" else ""
+            logger.info("참가자 검색 성공: eventId=$eventId, 검색어='$search', 결과=${response.participants.size}건$trackingExcluded")
             
             // 200 OK로 검색 결과 반환
             ResponseEntity.ok(ApiResponse(data = response))

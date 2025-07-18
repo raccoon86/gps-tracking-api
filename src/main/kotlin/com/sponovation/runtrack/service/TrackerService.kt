@@ -29,13 +29,20 @@ class TrackerService(
             throw IllegalArgumentException("존재하지 않는 참가자입니다: ${request.participantId}")
         }
 
-        // 이미 트래킹 중인지 확인
-        if (trackerRepository.existsByUserIdAndParticipantId(request.userId, request.participantId)) {
+        // 이미 트래킹 중인지 확인 (이벤트별로 체크)
+        if (trackerRepository.existsByUserIdAndEventIdAndEventDetailIdAndParticipantId(
+                request.userId, 
+                request.eventId, 
+                request.eventDetailId, 
+                request.participantId
+            )) {
             throw IllegalArgumentException("이미 트래킹 중인 참가자입니다")
         }
 
         val tracker = Tracker(
             userId = request.userId,
+            eventId = request.eventId,
+            eventDetailId = request.eventDetailId,
             participantId = request.participantId
         )
 
@@ -60,6 +67,40 @@ class TrackerService(
             TrackerItemDto(
                 participantId = participant.id,
                 name = participant.name,
+                nickname = participant.nickname,
+                bibNumber = participant.bibNumber,
+                profileImageUrl = participant.profileImageUrl,
+                country = participant.country
+            )
+        }
+
+        return TrackerListResponseDto(
+            participants = trackerItems
+        )
+    }
+
+    /**
+     * 특정 이벤트에서 사용자의 트래킹 목록 조회
+     */
+    @Transactional(readOnly = true)
+    fun getTrackerList(userId: Long, eventId: Long, eventDetailId: Long): TrackerListResponseDto {
+//        // 사용자 존재 여부 확인
+//        if (userId < 10000 && !userRepository.existsById(userId)) {
+//            throw IllegalArgumentException("존재하지 않는 사용자입니다: $userId")
+//        }
+
+        // 특정 이벤트에서 사용자가 트래킹하는 참가자 목록 조회
+        val participants = trackerRepository.findParticipantsByUserIdAndEventIdAndEventDetailId(
+            userId, 
+            eventId, 
+            eventDetailId
+        )
+
+        val trackerItems = participants.map { participant ->
+            TrackerItemDto(
+                participantId = participant.id,
+                name = participant.name,
+                nickname = participant.nickname,
                 bibNumber = participant.bibNumber,
                 profileImageUrl = participant.profileImageUrl,
                 country = participant.country
@@ -84,12 +125,22 @@ class TrackerService(
             throw IllegalArgumentException("존재하지 않는 참가자입니다: ${request.participantId}")
         }
 
-        // 트래킹 관계 존재 여부 확인
-        if (!trackerRepository.existsByUserIdAndParticipantId(request.userId, request.participantId)) {
+        // 트래킹 관계 존재 여부 확인 (이벤트별로 체크)
+        if (!trackerRepository.existsByUserIdAndEventIdAndEventDetailIdAndParticipantId(
+                request.userId, 
+                request.eventId, 
+                request.eventDetailId, 
+                request.participantId
+            )) {
             throw IllegalArgumentException("트래킹하지 않는 참가자입니다")
         }
 
-        val deletedCount = trackerRepository.deleteByUserIdAndParticipantId(request.userId, request.participantId)
+        val deletedCount = trackerRepository.deleteByUserIdAndEventIdAndEventDetailIdAndParticipantId(
+            request.userId, 
+            request.eventId, 
+            request.eventDetailId, 
+            request.participantId
+        )
         
         return if (deletedCount > 0) {
             "트래킹이 삭제되었습니다"
@@ -111,6 +162,29 @@ class TrackerService(
         
         return mapOf(
             "userId" to userId,
+            "trackingCount" to trackingCount
+        )
+    }
+
+    /**
+     * 특정 이벤트에서 트래킹 통계 조회
+     */
+    @Transactional(readOnly = true)
+    fun getTrackerStats(userId: Long, eventId: Long, eventDetailId: Long): Map<String, Any> {
+//        if (userId < 10000 && !userRepository.existsById(userId)) {
+//            throw IllegalArgumentException("존재하지 않는 사용자입니다: $userId")
+//        }
+
+        val trackingCount = trackerRepository.countByUserIdAndEventIdAndEventDetailId(
+            userId, 
+            eventId, 
+            eventDetailId
+        )
+        
+        return mapOf(
+            "userId" to userId,
+            "eventId" to eventId,
+            "eventDetailId" to eventDetailId,
             "trackingCount" to trackingCount
         )
     }

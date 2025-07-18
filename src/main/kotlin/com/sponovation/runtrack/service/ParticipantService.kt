@@ -20,7 +20,8 @@ class ParticipantService(
     private val participantRepository: ParticipantRepository,
     private val eventRepository: EventRepository,
     private val eventDetailRepository: EventDetailRepository,
-    private val userRepository: UserRepository
+    private val userRepository: UserRepository,
+    private val trackerService: TrackerService
 ) {
 
     /**
@@ -237,6 +238,7 @@ class ParticipantService(
         // 검색 실행
         val participants = participantRepository.searchParticipantsWithCursor(
             eventId = request.eventId,
+            eventDetailId = request.eventDetailId,
             search = request.search?.trim()?.takeIf { it.isNotBlank() },
             cursorBibNumber = cursorBibNumber,
             cursorCreatedAt = cursorCreatedAt,
@@ -251,11 +253,26 @@ class ParticipantService(
             participants
         }
 
+        // 트래킹 목록에 있는 참가자들을 제외
+        val filteredParticipants = if (request.userId != null && request.eventDetailId != null) {
+            // 현재 사용자의 트래킹 목록 조회
+            val trackerList = trackerService.getTrackerList(request.userId, request.eventId, request.eventDetailId)
+            val trackedParticipantIds = trackerList.participants.map { it.participantId }.toSet()
+            
+            // 트래킹 목록에 없는 참가자들만 필터링
+            resultParticipants.filter { participant ->
+                participant.id !in trackedParticipantIds
+            }
+        } else {
+            resultParticipants
+        }
+
         // 응답 DTO 변환
-        val searchItems = resultParticipants.map { participant ->
+        val searchItems = filteredParticipants.map { participant ->
             ParticipantSearchItemDto(
                 participantId = participant.id,
                 name = participant.name,
+                nickname = participant.nickname,
                 bibNumber = participant.bibNumber,
                 profileImageUrl = participant.profileImageUrl,
                 country = participant.country
@@ -263,8 +280,8 @@ class ParticipantService(
         }
 
         // 다음 커서 생성
-        val nextCursor = if (hasNext && resultParticipants.isNotEmpty()) {
-            val lastParticipant = resultParticipants.last()
+        val nextCursor = if (hasNext && filteredParticipants.isNotEmpty()) {
+            val lastParticipant = filteredParticipants.last()
             createCursor(lastParticipant.bibNumber, lastParticipant.createdAt)
         } else {
             null
