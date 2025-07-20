@@ -109,14 +109,14 @@ class EventDetailService(
      */
     fun getEventAndCourseInfo(eventId: Long): EventInfoResponseDto {
         logger.info("이벤트 및 코스 정보 조회 요청: eventId=$eventId")
-        
+
         // 이벤트 조회
         val event = eventRepository.findById(eventId)
             .orElseThrow { IllegalArgumentException("이벤트를 찾을 수 없습니다: eventId=$eventId") }
-        
+
         // 이벤트 상세 정보 조회 (거리 순으로 정렬)
         val eventDetails = eventDetailRepository.findByEventIdOrderByDistanceAsc(eventId)
-        
+
         // 이벤트 DTO 생성
         val eventDto = EventInfoDto(
             id = event.id,
@@ -134,7 +134,7 @@ class EventDetailService(
             createdAt = event.createdAt,
             updatedAt = event.updatedAt
         )
-        
+
         // 이벤트 상세 DTO 목록 생성
         val eventDetailsList = eventDetails.map { eventDetail ->
             EventDetailInfoDto(
@@ -147,33 +147,33 @@ class EventDetailService(
                 updatedAt = eventDetail.updatedAt
             )
         }
-        
+
         logger.info("이벤트 및 코스 정보 조회 완료: eventId=$eventId, 코스 수=${eventDetailsList.size}")
-        
+
         return EventInfoResponseDto(
             event = eventDto,
             eventDetails = eventDetailsList
         )
     }
-    
+
     /**
      * 테스트용 EventDetail 생성
      */
     @Transactional
     fun createTestCourse(request: CreateTestCourseRequestDto): CreateTestCourseResponseDto {
         logger.info("테스트 EventDetail 생성 시작: eventId=${request.eventId}, courseName=${request.courseName}")
-        
+
         try {
             // Event 존재 여부 확인
             if (!eventRepository.existsById(request.eventId)) {
                 throw IllegalArgumentException("Event를 찾을 수 없습니다: eventId=${request.eventId}")
             }
-            
+
             // 기본값 설정
             val startDateTime = request.startDateTime ?: LocalDateTime.now().plusDays(1)
             val endDateTime = request.endDateTime ?: startDateTime.plusHours(6)
             val gpxFile = request.gpxFile ?: "test://gpx/test_route.gpx"
-            
+
             // EventDetail 엔티티 생성
             val eventDetail = EventDetail(
                 eventId = request.eventId,
@@ -183,11 +183,11 @@ class EventDetailService(
                 startDateTime = startDateTime,
                 endDateTime = endDateTime
             )
-            
+
             val savedEventDetail = eventDetailRepository.save(eventDetail)
-            
+
             logger.info("테스트 EventDetail 생성 완료: eventDetailId=${savedEventDetail.id}")
-            
+
             return CreateTestCourseResponseDto(
                 eventDetailId = savedEventDetail.id,
                 eventId = savedEventDetail.eventId,
@@ -200,7 +200,7 @@ class EventDetailService(
                 message = "새 이벤트 상세 생성 완료",
                 isNewlyCreated = true
             )
-            
+
         } catch (e: Exception) {
             logger.error("테스트 EventDetail 생성 실패: eventId=${request.eventId}", e)
             throw e
@@ -243,12 +243,12 @@ class EventDetailService(
         currentUserId: Long?
     ): List<EventParticipantLocationDto> {
         logger.info("참가자 위치 데이터 조회 시작: eventId=$eventId, eventDetailId=$eventDetailId")
-        
+
         try {
             // 1. 리더보드 상위 3명 유저 ID 조회
             val top3UserIds = leaderboardService.getTopRankers(eventId, eventDetailId)
             logger.info("리더보드 상위 3명 조회: $top3UserIds")
-            
+
             // 2. 현재 사용자가 트래킹하는 유저 ID 조회 (/api/v1/trackers/{userId} API 호출)
             val trackedUserIds = if (currentUserId != null) {
                 try {
@@ -262,15 +262,15 @@ class EventDetailService(
                 emptyList()
             }
             logger.info("트래킹 중인 유저 조회: $trackedUserIds")
-            
+
             // 3. 중복 제거하여 전체 유저 ID 목록 생성
             val allUserIds = (top3UserIds + trackedUserIds).distinct()
             logger.info("전체 대상 유저 ID: $allUserIds")
-            
+
             // 4. 위치 데이터 조회
             val participantLocations = getBatchParticipantLocations(allUserIds, eventId, eventDetailId)
             val mapMarkerData = buildMapMarkerData(participantLocations, eventId, eventDetailId, currentUserId)
-            
+
             logger.info("참가자 위치 데이터 조회 완료: 실제 위치 데이터 수=${participantLocations.size}")
             return mapMarkerData
         } catch (e: Exception) {
@@ -284,10 +284,11 @@ class EventDetailService(
      */
     private fun getTopRankers(eventId: Long, eventDetailId: Long): List<TopRankerDto> {
         logger.info("상위 랭커 조회 시작: eventDetailId=$eventDetailId")
-        
+
         try {
             // Redis Sorted Set에서 상위 3명의 userId 조회
-            val topRankersWithScores = leaderboardService.getTopRankersWithScores(eventId.toString(), eventDetailId.toString())
+            val topRankersWithScores =
+                leaderboardService.getTopRankersWithScores(eventId.toString(), eventDetailId.toString())
             if (topRankersWithScores.isEmpty()) {
                 logger.info("상위 랭커 없음: eventDetailId=$eventDetailId")
                 return emptyList()
@@ -298,7 +299,7 @@ class EventDetailService(
                 try {
                     // participants 테이블에서 참가자 정보 조회
                     val participant = participantRepository.findByEventDetailIdAndUserId(eventDetailId, userId)
-                    
+
                     if (participant == null) {
                         logger.warn("참가자 정보 없음: userId=$userId, eventDetailId=$eventDetailId")
                         return@mapIndexedNotNull null
@@ -316,7 +317,7 @@ class EventDetailService(
                     null
                 }
             }
-            
+
             logger.info("상위 랭커 조회 완료: eventDetailId=$eventDetailId, 랭커 수=${topRankers.size}")
             return topRankers
         } catch (e: Exception) {
@@ -370,7 +371,7 @@ class EventDetailService(
         try {
             val hashOps = redisTemplate.opsForHash<String, Any>()
             val allFields = hashOps.entries(key)
-            
+
             if (allFields.isEmpty()) {
                 return null
             }
@@ -382,7 +383,7 @@ class EventDetailService(
                 is String -> rawUserId.toLongOrNull()
                 else -> null
             }
-            
+
             if (extractedUserId == null) {
                 logger.warn("필수 필드 누락 - userId: key=$key")
                 return null
@@ -390,7 +391,7 @@ class EventDetailService(
 
             val correctedLatitude = allFields["latitude"]?.toString()?.toDoubleOrNull()
             val correctedLongitude = allFields["longitude"]?.toString()?.toDoubleOrNull()
-            
+
             if (correctedLatitude == null || correctedLongitude == null) {
                 logger.warn("필수 위치 필드 누락: key=$key")
                 return null
@@ -441,7 +442,7 @@ class EventDetailService(
         try {
             // 마커 우선순위 분류를 위한 사용자 그룹 조회
             val top3UserIds = leaderboardService.getTopRankers(eventId, eventDetailId).toSet()
-            val trackedUserIds = currentUserId?.let { 
+            val trackedUserIds = currentUserId?.let {
                 getTrackedUserIds(it)
             }?.toSet() ?: emptySet()
 
@@ -491,13 +492,35 @@ class EventDetailService(
         return try {
             val trackerList = trackerService.getTrackerList(currentUserId)
             val trackedUserIds = trackerList.participants.map { it.participantId }
-            
+
             logger.info("트래킹 목록 조회 완료: currentUserId=$currentUserId, 트래킹 참가자 수=${trackerList.participants.size}")
             trackedUserIds
 
         } catch (e: Exception) {
             logger.error("트래킹 목록 조회 실패: currentUserId=$currentUserId", e)
             emptyList()
+        }
+    }
+
+    /**
+     * eventDetailId를 통해 EventDetail 조회
+     *
+     * @param eventDetailId 이벤트 상세 ID
+     * @return EventDetail 엔티티 또는 null
+     */
+    fun findCourseByEventDetailId(eventDetailId: Long): EventDetail? {
+        return try {
+            // eventDetailId를 courseId로 직접 사용하여 조회
+            val course = eventDetailRepository.findById(eventDetailId)
+            if (course.isPresent) {
+                course.get()
+            } else {
+                logger.warn("EventDetail 조회 실패: courseId=$eventDetailId")
+                null
+            }
+        } catch (e: Exception) {
+            logger.error("EventDetail 조회 중 오류 발생: eventDetailId=$eventDetailId", e)
+            null
         }
     }
 } 

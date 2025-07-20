@@ -4,6 +4,9 @@ import com.sponovation.runtrack.dto.*
 import com.sponovation.runtrack.algorithm.KalmanFilter
 import com.sponovation.runtrack.algorithm.MapMatcher
 import com.sponovation.runtrack.algorithm.MatchResult
+import com.sponovation.runtrack.common.ErrorResponse
+import com.sponovation.runtrack.repository.EventDetailRepository
+import com.sponovation.runtrack.repository.EventRepository
 import com.sponovation.runtrack.util.GeoUtils
 import io.jenetics.jpx.Track
 import io.jenetics.jpx.WayPoint
@@ -11,6 +14,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.data.redis.core.RedisTemplate
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import org.springframework.web.multipart.MultipartFile
 import java.time.Instant
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -22,51 +26,51 @@ import java.util.concurrent.TimeUnit
  * GPX 파일 처리 및 실시간 위치 보정 서비스
  *
  * ================================ 핵심 비즈니스 로직 ================================
- * 
+ *
  * 1. **GPX 경로 관리**
  *    - GPX 파일 업로드 및 파싱
  *    - 웨이포인트 추출 및 100미터 간격 보간 포인트 생성
  *    - Redis 기반 코스 데이터 저장 (DB 저장 기능은 비활성화됨)
  *    - 체크포인트 자동 생성 (시작점, 중간점, 종료점)
- * 
+ *
  * 2. **실시간 GPS 위치 보정**
  *    - 참가자의 실시간 GPS 데이터 수신
  *    - 3차원 칼만 필터를 통한 GPS 노이즈 제거 및 정확도 향상
  *    - 맵 매칭 알고리즘을 통한 GPS 위치를 실제 경로에 스냅
  *    - GPS 신뢰도 및 보정 품질 평가
- * 
+ *
  * 3. **체크포인트 통과 관리**
  *    - 실시간 체크포인트 통과 감지 (반경 30m 기준)
  *    - 구간별 소요 시간 계산 및 누적 시간 관리
  *    - 체크포인트 통과 이력 Redis 저장
  *    - 중복 통과 방지 로직
- * 
+ *
  * 4. **리더보드 시스템**
  *    - 참가자별 진행 상황 추적 (가장 먼 체크포인트 기준)
  *    - Redis Sorted Set 기반 실시간 리더보드 업데이트
  *    - 체크포인트 인덱스와 누적 시간을 조합한 순위 계산
- * 
+ *
  * 5. **데이터 저장 구조**
  *    - Redis: 실시간 위치, 체크포인트 통과 시간, 코스 데이터
  *    - Hash: 개별 참가자 위치 정보
  *    - Sorted Set: 이벤트별 리더보드
  *    - String: GPX 파싱 데이터
- * 
+ *
  * ================================ 알고리즘 특징 ================================
- * 
+ *
  * - **칼만 필터**: GPS 정확도와 속도를 고려한 가중치 기반 3차원 노이즈 제거
  * - **맵 매칭**: 보간된 경로 포인트와의 거리, 방향을 고려한 최적 매칭점 탐색
  * - **체크포인트 감지**: 이전 위치와 현재 위치의 경계 통과 여부로 정확한 통과 시점 판정
  * - **보정 품질 평가**: GPS 신뢰도, 매칭 점수, 보정 강도를 종합한 4단계 품질 등급
- * 
+ *
  * ================================ 주요 제약사항 ================================
- * 
+ *
  * - 체크포인트 통과 인식 반경: 30미터
  * - 최대 구간 시간: 24시간
  * - GPX 파일 크기 제한: 10MB
  * - Redis TTL: 위치 데이터 24시간, 리더보드 7일
  * - 보간 간격: 100미터
- * 
+ *
  * 현재 도메인 엔티티들이 삭제되어 데이터베이스 저장 기능은 비활성화됨
  * Redis 기반 코스 데이터 저장만 지원
  */
@@ -74,7 +78,8 @@ import java.util.concurrent.TimeUnit
 @Transactional(readOnly = true)
 class GpxService(
     private val realtimeLocationService: RealtimeLocationService,
-    private val courseDataService: CourseDataService,
+    private val eventRepository: EventRepository,
+    private val eventDetailRepository: EventDetailRepository,
     private val redisTemplate: RedisTemplate<String, String>,
     private val checkpointTimesService: CheckpointTimesService,
     private val gpxParsingRedisService: GpxParsingRedisService
@@ -103,18 +108,18 @@ class GpxService(
 
     /**
      * ================================ GPS 위치 데이터 클래스 ================================
-     * 
+     *
      * Redis에 저장되는 참가자의 GPS 위치 및 보정 정보를 담는 데이터 클래스입니다.
      * 원본 GPS 센서 데이터와 칼만 필터 + 맵 매칭으로 보정된 데이터를 모두 포함합니다.
-     * 
+     *
      * **데이터 분류:**
      * 1. 식별 정보: userId, eventId, eventDetailId
      * 2. 원본 GPS: raw로 시작하는 필드들 (센서 직접 수신값)
      * 3. 보정 GPS: corrected로 시작하는 필드들 (알고리즘 처리값)
      * 4. 계산 정보: 이동거리, 시간 등 파생 데이터
-     * 
+     *
      * @property userId 사용자 ID
-     * @property eventId 이벤트 ID  
+     * @property eventId 이벤트 ID
      * @property eventDetailId 이벤트 상세 ID (코스 구분용)
      * @property rawLatitude 원본 GPS 위도 (도, WGS84)
      * @property rawLongitude 원본 GPS 경도 (도, WGS84)
@@ -160,39 +165,39 @@ class GpxService(
 
     /**
      * ================================ 체크포인트 통과 감지 핵심 로직 ================================
-     * 
+     *
      * **비즈니스 목적:**
      * 마라톤 참가자가 코스 상의 체크포인트를 정확히 통과했는지 실시간으로 감지하여
      * 구간별 기록 측정 및 순위 계산의 기준점을 제공합니다.
-     * 
+     *
      * **감지 알고리즘:**
      * 1. **경계 교차 감지**: 이전 위치에서 현재 위치로 이동하면서 체크포인트 반경을 통과했는지 확인
      *    - 이전 위치: 체크포인트 반경(30m) 밖
      *    - 현재 위치: 체크포인트 반경(30m) 안
      *    - 단순히 반경 안에 있는 것이 아니라 '경계를 통과'해야 통과로 인정
-     * 
+     *
      * 2. **중복 통과 방지**: Redis에서 해당 체크포인트 통과 이력 확인
      *    - 이미 통과한 체크포인트는 재통과로 인정하지 않음
      *    - 참가자가 같은 지점을 여러 번 지나가더라도 첫 통과만 기록
-     * 
+     *
      * 3. **정확한 통과 시점 기록**: GPS 수신 시점을 기준으로 통과 시간 기록
      *    - Unix timestamp 기반 정확한 시간 기록
      *    - 구간별 소요 시간 계산의 기준점 제공
-     * 
+     *
      * **처리 과정:**
      * STEP 1: Redis에서 이전 위치 조회
      * STEP 2: GPX 파싱 데이터에서 체크포인트 정보 로드
      * STEP 3: 각 체크포인트별로 통과 여부 검사
      * STEP 4: 경계 교차 및 중복 검사
      * STEP 5: 새로 통과한 체크포인트 목록 반환
-     * 
+     *
      * **중요 제약사항:**
      * - 체크포인트 인식 반경: 30미터 (CHECKPOINT_CROSSING_THRESHOLD)
      * - 체크포인트 타입: start, checkpoint, finish만 인식
      * - 순서 무관: 체크포인트를 순서대로 통과하지 않아도 인정 (다양한 코스 상황 고려)
      *
      * @param userId 사용자 ID
-     * @param eventId 이벤트 ID  
+     * @param eventId 이벤트 ID
      * @param eventDetailId 이벤트 상세 ID
      * @param currentLat 현재 위도
      * @param currentLng 현재 경도
@@ -600,96 +605,42 @@ class GpxService(
     }
 
     /**
-     * 경로 통계 계산
-     *
-     * 웨이포인트 간의 거리를 계산하여 총 거리를 구하고,
-     * 고도 변화를 분석하여 상승/하강 고도를 계산합니다.
-     *
-     * @param waypoints 웨이포인트 리스트
-     * @return 경로 통계 데이터 (총 거리, 고도 상승, 고도 하강)
-     */
-    private fun calculateRouteStatistics(waypoints: List<WayPoint>): RouteStatistics {
-        var totalDistance = 0.0
-        var elevationGain = 0.0
-        var elevationLoss = 0.0
-        var previousElevation: Double? = null
-
-        // 연속된 웨이포인트 간의 거리와 고도 변화 계산
-        for (i in 1 until waypoints.size) {
-            val prev = waypoints[i - 1]
-            val curr = waypoints[i]
-
-            // 두 지점 간의 거리 계산 (하버사인 공식 사용)
-            val distance = GeoUtils.calculateDistance(
-                prev.latitude.toDegrees(),
-                prev.longitude.toDegrees(),
-                curr.latitude.toDegrees(),
-                curr.longitude.toDegrees()
-            )
-            totalDistance += distance
-
-            // 고도 변화 계산 (유효한 고도 데이터가 있는 경우만)
-            val prevElev = prev.elevation.map { it.toDouble() }.orElse(null)
-            val currElev = curr.elevation.map { it.toDouble() }.orElse(null)
-
-            // 고도 데이터가 유효한 경우에만 고도 변화 계산 (음수 고도는 유효하지 않은 데이터로 처리)
-            if (prevElev != null && currElev != null && prevElev >= 0 && currElev >= 0) {
-                previousElevation?.let { validPrevElevation ->
-                    if (validPrevElevation >= 0) {
-                        val elevationDiff = currElev - validPrevElevation
-                        if (elevationDiff > 0) {
-                            // 상승 고도 누적
-                            elevationGain += elevationDiff
-                        } else {
-                            // 하강 고도 누적 (절댓값)
-                            elevationLoss += kotlin.math.abs(elevationDiff)
-                        }
-                    }
-                }
-                previousElevation = currElev
-            }
-        }
-
-        return RouteStatistics(totalDistance, elevationGain, elevationLoss)
-    }
-
-    /**
      * ================================ 실시간 GPS 위치 보정 핵심 메서드 ================================
-     * 
+     *
      * 이 메서드는 전체 시스템의 핵심 비즈니스 로직으로, 다음과 같은 단계로 GPS 위치를 보정합니다:
-     * 
+     *
      * **STEP 1: GPS 데이터 검증 및 준비**
      * - 입력받은 GPS 데이터 유효성 검증
      * - Redis에서 해당 이벤트의 코스 데이터 조회
      * - 3차원 칼만 필터 인스턴스 초기화
-     * 
+     *
      * **STEP 2: 순차적 GPS 필터링**
      * - 각 GPS 포인트에 대해 칼만 필터 적용
      * - GPS 정확도(accuracy)와 속도(speed)를 고려한 가중치 계산
      * - 3차원 좌표(위도, 경도, 고도) 노이즈 제거
-     * 
+     *
      * **STEP 3: 맵 매칭 (경로 스냅)**
      * - 마지막(최신) GPS 포인트에 대해서만 맵 매칭 수행
      * - 보간된 경로 포인트들과의 거리 및 방향 비교
      * - 최적의 경로상 위치로 GPS 좌표 보정
      * - 경로 진행률 및 시작점으로부터 거리 계산
-     * 
+     *
      * **STEP 4: 체크포인트 통과 감지**
      * - 이전 위치와 현재 위치 비교하여 체크포인트 경계 통과 여부 판정
      * - 30미터 반경 내 체크포인트 감지
      * - 중복 통과 방지 (이미 통과한 체크포인트 제외)
      * - 구간 시간 및 누적 시간 계산
-     * 
+     *
      * **STEP 5: 데이터 저장 및 업데이트**
      * - Redis에 보정된 위치 정보 저장
      * - 체크포인트 통과 기록 저장
      * - 이전 위치 정보 업데이트 (다음 요청 시 사용)
      * - 리더보드 Sorted Set 업데이트
      *
-     * 
+     *
      * @param request GPS 위치 보정 요청 (userId, eventId, eventDetailId, gpsData 포함)
      * @return 보정된 위치, 체크포인트 통과 정보, 매칭 품질 정보 포함한 응답
-     * 
+     *
      * **핵심 알고리즘:**
      * - 칼만 필터: 연속된 GPS 측정값의 노이즈 제거 및 정확도 향상
      * - 맵 매칭: 거리 기반 + 방향 기반 매칭으로 경로상 최적 위치 탐색
@@ -758,74 +709,74 @@ class GpxService(
                 )
 
                 // 경로 매칭 수행
-                    val matchResult = if (courseData == null) {
-                        // 코스 데이터가 없으면 기본 GPS 위치 사용 (GpxRoute 엔티티 삭제됨)
-                        logger.warn("코스 데이터가 Redis에 없음. 기본 GPS 위치 사용: eventDetailId=$eventDetailId")
+                val matchResult = if (courseData == null) {
+                    // 코스 데이터가 없으면 기본 GPS 위치 사용 (GpxRoute 엔티티 삭제됨)
+                    logger.warn("코스 데이터가 Redis에 없음. 기본 GPS 위치 사용: eventDetailId=$eventDetailId")
 
-                        // 기본 매칭 결과 생성
-                        MatchResult(
-                            matched = false,
-                            distanceToRoute = Double.MAX_VALUE,
-                            matchedLatitude = filtered.first,
-                            matchedLongitude = filtered.second,
-                            routeProgress = 0.0
-                        )
-                    } else {
-                        // 코스 데이터가 있는 경우 보간된 포인트를 사용한 정밀 매칭
-                        logger.debug("코스 데이터 발견: ${courseData.totalPoints}개 보간 포인트 사용")
+                    // 기본 매칭 결과 생성
+                    MatchResult(
+                        matched = false,
+                        distanceToRoute = Double.MAX_VALUE,
+                        matchedLatitude = filtered.first,
+                        matchedLongitude = filtered.second,
+                        routeProgress = 0.0
+                    )
+                } else {
+                    // 코스 데이터가 있는 경우 보간된 포인트를 사용한 정밀 매칭
+                    logger.debug("코스 데이터 발견: ${courseData.totalPoints}개 보간 포인트 사용")
 
-                        val matcher = MapMatcher()
-                        val result = matcher.matchToInterpolatedRoute(
-                            gpsLat = filtered.first,
-                            gpsLon = filtered.second,
-                            bearing = lastGpsData.heading?.toDouble() ?: 0.0,
-                            interpolatedPoints = courseData.interpolatedPoints
-                        )
+                    val matcher = MapMatcher()
+                    val result = matcher.matchToInterpolatedRoute(
+                        gpsLat = filtered.first,
+                        gpsLon = filtered.second,
+                        bearing = lastGpsData.heading?.toDouble() ?: 0.0,
+                        interpolatedPoints = courseData.interpolatedPoints
+                    )
 
-                        // 상세 매칭 정보 로깅
-                        logger.info("GPS 매칭 결과:")
-                        logger.info("- 매칭 성공: ${result.matched}")
-                        logger.info("- 경로까지 거리: ${"%.2f".format(result.distanceToRoute)}m")
-                        logger.info("- 매칭 점수: ${"%.4f".format(result.matchScore)}")
-                        logger.info("- 현재 이동 방향: ${result.currentBearing}°")
-                        logger.info("- 경로 방향: ${result.routeBearing}°")
-                        logger.info("- 방향 차이: ${"%.1f".format(result.bearingDifference ?: 0.0)}°")
-                        logger.info("- 경로 진행률: ${"%.2f".format(result.routeProgress * 100)}%")
-                        logger.info("- 시작점으로부터 거리: ${"%.2f".format(result.distanceFromStart)}m")
+                    // 상세 매칭 정보 로깅
+                    logger.info("GPS 매칭 결과:")
+                    logger.info("- 매칭 성공: ${result.matched}")
+                    logger.info("- 경로까지 거리: ${"%.2f".format(result.distanceToRoute)}m")
+                    logger.info("- 매칭 점수: ${"%.4f".format(result.matchScore)}")
+                    logger.info("- 현재 이동 방향: ${result.currentBearing}°")
+                    logger.info("- 경로 방향: ${result.routeBearing}°")
+                    logger.info("- 방향 차이: ${"%.1f".format(result.bearingDifference ?: 0.0)}°")
+                    logger.info("- 경로 진행률: ${"%.2f".format(result.routeProgress * 100)}%")
+                    logger.info("- 시작점으로부터 거리: ${"%.2f".format(result.distanceFromStart)}m")
 
-                        result.nearestGpxPoint?.let { nearest ->
-                            logger.info("가장 가까운 GPX 포인트:")
-                            logger.info("- 위치: (${"%.6f".format(nearest.latitude)}, ${"%.6f".format(nearest.longitude)})")
-                            logger.info("- 거리: ${"%.2f".format(nearest.distanceToPoint)}m")
-                            logger.info("- 경로 방향: ${nearest.routeBearing}°")
-                        }
-
-                        result
+                    result.nearestGpxPoint?.let { nearest ->
+                        logger.info("가장 가까운 GPX 포인트:")
+                        logger.info("- 위치: (${"%.6f".format(nearest.latitude)}, ${"%.6f".format(nearest.longitude)})")
+                        logger.info("- 거리: ${"%.2f".format(nearest.distanceToPoint)}m")
+                        logger.info("- 경로 방향: ${nearest.routeBearing}°")
                     }
 
-                    finalCorrectedLat = matchResult.matchedLatitude
-                    finalCorrectedLng = matchResult.matchedLongitude
-                    finalCorrectedAlt = filtered.third // 칼만 필터에서 보정된 고도 사용
+                    result
+                }
 
-                    logger.info(
-                        "최종 맵매칭 완료: 보정위치=(${"%.6f".format(finalCorrectedLat)}, ${"%.6f".format(finalCorrectedLng)}, " +
-                                "${finalCorrectedAlt?.let { "%.2f".format(it) } ?: "null"}m)")
+                finalCorrectedLat = matchResult.matchedLatitude
+                finalCorrectedLng = matchResult.matchedLongitude
+                finalCorrectedAlt = filtered.third // 칼만 필터에서 보정된 고도 사용
 
-                    // 실시간 위치 저장
-                    try {
-                        realtimeLocationService.saveParticipantLocation(
-                            userId = userId,
-                            eventId = eventId,
-                            eventDetailId = eventDetailId,
-                            latitude = finalCorrectedLat,
-                            longitude = finalCorrectedLng,
-                            altitude = finalCorrectedAlt,
-                            speed = lastGpsData.speed,
-                            timestamp = timestamp
-                        )
-                    } catch (e: Exception) {
-                        logger.warn("실시간 위치 저장 실패 (계속 진행): userId=$userId", e)
-                    }
+                logger.info(
+                    "최종 맵매칭 완료: 보정위치=(${"%.6f".format(finalCorrectedLat)}, ${"%.6f".format(finalCorrectedLng)}, " +
+                            "${finalCorrectedAlt?.let { "%.2f".format(it) } ?: "null"}m)")
+
+                // 실시간 위치 저장
+                try {
+                    realtimeLocationService.saveParticipantLocation(
+                        userId = userId,
+                        eventId = eventId,
+                        eventDetailId = eventDetailId,
+                        latitude = finalCorrectedLat,
+                        longitude = finalCorrectedLng,
+                        altitude = finalCorrectedAlt,
+                        speed = lastGpsData.speed,
+                        timestamp = timestamp
+                    )
+                } catch (e: Exception) {
+                    logger.warn("실시간 위치 저장 실패 (계속 진행): userId=$userId", e)
+                }
             }
 
             logger.info(
@@ -1004,7 +955,7 @@ class GpxService(
 
     /**
      * ================================ GPS 위치 및 추가 정보 Redis 저장 ================================
-     * 
+     *
      * **저장되는 GPS 데이터:**
      * 1. **원본 GPS 정보**
      *    - 위도/경도: GPS 센서에서 직접 수신한 원본 좌표
@@ -1013,22 +964,22 @@ class GpxService(
      *    - 속도: GPS 센서 속도 (km/h 또는 m/s)
      *    - 방향: GPS 이동 방향 (도, 0-359)
      *    - 수신 시간: Unix timestamp
-     * 
+     *
      * 2. **보정된 GPS 정보**
      *    - 위도/경도: 칼만 필터 + 맵 매칭으로 보정된 좌표
      *    - 고도: 칼만 필터로 노이즈 제거된 고도
      *    - 이동 거리: 누적 이동 거리 (미터)
      *    - 누적 시간: 총 소요 시간 (초)
-     * 
+     *
      * 3. **추가 메타 정보**
      *    - 마지막 업데이트 시간
      *    - 시작점으로부터 직선 거리
-     * 
+     *
      * **Redis 저장 구조: Hash**
      * - Key: location:{userId}:{eventDetailId}
      * - Fields: 각종 GPS 및 보정 정보
      * - TTL: 24시간
-     * 
+     *
      * @param userId 사용자 ID
      * @param eventId 이벤트 ID
      * @param eventDetailId 이벤트 상세 ID
@@ -1103,23 +1054,23 @@ class GpxService(
 
             // Redis Hash에 GPS 데이터 저장 (원본 + 보정된 정보)
             val hashOps = redisTemplate.opsForHash<String, String>()
-            
+
             // 기본 식별 정보
             hashOps.put(redisKey, "userId", locationData.userId.toString())
             hashOps.put(redisKey, "eventId", locationData.eventId.toString())
             hashOps.put(redisKey, "eventDetailId", locationData.eventDetailId.toString())
-            
+
             // 원본 GPS 데이터 (센서에서 직접 수신한 값들)
             hashOps.put(redisKey, "latitude", locationData.rawLatitude.toString())
             hashOps.put(redisKey, "longitude", locationData.rawLongitude.toString())
             hashOps.put(redisKey, "speed", locationData.rawSpeed?.toString() ?: "null")
             hashOps.put(redisKey, "heading", locationData.heading?.toString() ?: "null")
-            
+
             // 보정된 GPS 데이터 (칼만 필터 + 맵 매칭 적용)
             hashOps.put(redisKey, "latitude", locationData.correctedLatitude.toString())
             hashOps.put(redisKey, "longitude", locationData.correctedLongitude.toString())
             hashOps.put(redisKey, "altitude", locationData.correctedAltitude?.toString() ?: "null")
-            
+
             // 계산된 메타 정보
             hashOps.put(redisKey, "created", locationData.lastUpdated.toString())
 
@@ -1175,17 +1126,17 @@ class GpxService(
 
     /**
      * ================================ Redis GPS 위치 정보 조회 ================================
-     * 
+     *
      * **조회되는 GPS 데이터:**
      * - 원본 GPS: 위도, 경도, 고도, 정확도, 속도, 방향, 수신시간
      * - 보정 GPS: 위도, 경도, 고도 (칼만 필터 + 맵 매칭 적용)
      * - 계산 정보: 이동거리, 누적시간, 시작점거리, 마지막 업데이트
-     * 
+     *
      * **Redis 구조:**
      * - Key: location:{userId}:{eventDetailId}
      * - Type: Hash
      * - Fields: 각종 GPS 및 보정 데이터
-     * 
+     *
      * @param userId 사용자 ID
      * @param eventId 이벤트 ID
      * @param eventDetailId 이벤트 상세 ID
@@ -1410,19 +1361,106 @@ class GpxService(
             logger.error("리더보드 Sorted Set 업데이트 실패: eventDetailId=$eventDetailId, userId=$userId", e)
         }
     }
-}
 
-/**
- * 경로 통계 데이터 클래스
- *
- * GPX 경로의 통계 정보를 담는 데이터 클래스입니다.
- *
- * @property totalDistance 총 거리 (미터)
- * @property elevationGain 총 고도 상승 (미터)
- * @property elevationLoss 총 고도 하강 (미터)
- */
-private data class RouteStatistics(
-    val totalDistance: Double,
-    val elevationGain: Double,
-    val elevationLoss: Double
-) 
+    /**
+     * 대회 및 코스 유효성 확인
+     *
+     * @param userId 사용자 ID
+     * @param eventId 이벤트 ID
+     * @param eventDetailId 이벤트 상세 ID (EventDetail ID)
+     * @return 유효성 검사 결과
+     */
+    fun validateEventAndCourse(
+        userId: Long,
+        eventId: Long,
+        eventDetailId: Long
+    ): ErrorResponse.ValidationResult {
+        return try {
+            logger.info("대회 및 코스 유효성 검사 시작: userId=$userId, eventId=$eventId, eventDetailId=$eventDetailId")
+
+            // 1. Event 정보 조회 (eventId 사용)
+            val event = eventRepository.findById(eventId)
+                .orElse(null)
+
+            if (event == null) {
+                logger.warn("Event를 찾을 수 없음: eventId=$eventId")
+                return ErrorResponse.ValidationResult(false, "EVENT_NOT_FOUND", "해당 이벤트를 찾을 수 없습니다.")
+            }
+
+            // 2. EventDetail 정보 조회 (eventDetailId를 courseId로 사용)
+            val course = eventDetailRepository.findById(eventDetailId).orElse(null)
+
+            if (course == null) {
+                logger.warn("Course를 찾을 수 없음: eventDetailId=$eventDetailId")
+                return ErrorResponse.ValidationResult(false, "COURSE_NOT_FOUND", "해당 코스를 찾을 수 없습니다.")
+            }
+
+            // 3. GPX 파싱 데이터 존재 여부 확인
+            val gpxParsingData = gpxParsingRedisService.getGpxParsingData(
+                eventId = eventId,
+                eventDetailId = eventDetailId
+            )
+
+            if (!gpxParsingData.success || gpxParsingData.points.isEmpty()) {
+                logger.warn("GPX 파싱 데이터를 찾을 수 없음: eventId=$eventId, eventDetailId=$eventDetailId")
+                return ErrorResponse.ValidationResult(false, "GPX_DATA_NOT_FOUND", "GPX 파싱 데이터를 찾을 수 없습니다.")
+            }
+
+            ErrorResponse.ValidationResult(true, null, null)
+
+        } catch (e: Exception) {
+            logger.error("대회 및 코스 유효성 검사 중 오류 발생: userId=$userId, eventId=$eventId, eventDetailId=$eventDetailId", e)
+            ErrorResponse.ValidationResult(false, "VALIDATION_ERROR", "검증 중 오류가 발생했습니다.")
+        }
+    }
+
+    /**
+     * ByteArray를 MultipartFile로 변환
+     *
+     * @param bytes 파일 바이트 배열
+     * @param fileName 파일명
+     * @return MultipartFile 객체
+     */
+    fun createMultipartFileFromBytes(bytes: ByteArray, fileName: String): MultipartFile {
+        return object : MultipartFile {
+            override fun getName(): String = "file"
+            override fun getOriginalFilename(): String = fileName
+            override fun getContentType(): String = "application/gpx+xml"
+            override fun isEmpty(): Boolean = bytes.isEmpty()
+            override fun getSize(): Long = bytes.size.toLong()
+            override fun getBytes(): ByteArray = bytes
+            override fun getInputStream(): java.io.InputStream = java.io.ByteArrayInputStream(bytes)
+            override fun transferTo(dest: java.io.File) {
+                dest.writeBytes(bytes)
+            }
+        }
+    }
+
+    /**
+     * S3에서 GPX 파일 다운로드
+     *
+     * @param gpxFileUrl S3 GPX 파일 URL
+     * @return GPX 파일 바이트 배열
+     */
+    fun downloadGpxFromS3(gpxFileUrl: String): ByteArray {
+        return try {
+            logger.info("S3 GPX 파일 다운로드 시작: $gpxFileUrl")
+
+            // URL에서 S3 버킷과 키 정보 추출
+            val url = java.net.URL(gpxFileUrl)
+            val urlConnection = url.openConnection()
+
+            // 파일 다운로드
+            val inputStream = urlConnection.getInputStream()
+            val gpxBytes = inputStream.readBytes()
+            inputStream.close()
+
+            logger.info("S3 GPX 파일 다운로드 완료: $gpxFileUrl, 파일 크기=${gpxBytes.size} bytes")
+            gpxBytes
+
+        } catch (e: Exception) {
+            logger.error("S3 GPX 파일 다운로드 실패: $gpxFileUrl", e)
+            throw RuntimeException("S3 GPX 파일 다운로드 실패: ${e.message}", e)
+        }
+    }
+}

@@ -4,12 +4,10 @@ import com.sponovation.runtrack.dto.*
 import com.sponovation.runtrack.common.ApiResponse
 import com.sponovation.runtrack.service.GpxService
 import com.sponovation.runtrack.service.CourseDataService
-import com.sponovation.runtrack.service.CheckpointTimesService
 import com.sponovation.runtrack.service.LeaderboardService
 import com.sponovation.runtrack.service.GpxParsingRedisService
 import com.sponovation.runtrack.service.EventService
 import com.sponovation.runtrack.repository.EventDetailRepository
-import com.sponovation.runtrack.domain.EventDetail
 import java.util.*
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.Parameter
@@ -20,7 +18,6 @@ import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import org.springframework.web.multipart.MultipartFile
-import com.sponovation.runtrack.repository.EventRepository
 import com.sponovation.runtrack.enums.ErrorCode
 import com.sponovation.runtrack.common.ErrorResponse
 import com.sponovation.runtrack.service.EventDetailService
@@ -49,7 +46,6 @@ class GpxController(
     private val gpxService: GpxService,
     private val courseDataService: CourseDataService,
     private val leaderboardService: LeaderboardService,
-    private val eventRepository: EventRepository,
     private val gpxParsingRedisService: GpxParsingRedisService,
     private val eventDetailRepository: EventDetailRepository,
     private val eventService: EventService,
@@ -105,7 +101,7 @@ class GpxController(
         @Parameter(description = "GPS 위치 보정 요청 데이터", required = true)
         @Valid @RequestBody request: CorrectLocationRequestDto
     ): ResponseEntity<Any> {
-        val validationResult = validateEventAndCourse(request.userId, request.eventId, request.eventDetailId)
+        val validationResult = gpxService.validateEventAndCourse(request.userId, request.eventId, request.eventDetailId)
         if (!validationResult.isValid) {
             logger.warn("대회 및 코스 유효성 검사 실패: ${validationResult.errorMessage}")
             return ResponseEntity.status(HttpStatus.BAD_REQUEST)
@@ -126,7 +122,7 @@ class GpxController(
                     logger.info("S3에서 GPX 파일 로드 및 파싱 시작: eventId=${request.eventId}, eventDetailId=${request.eventDetailId}")
 
                     // EventDetail 조회 (eventDetailId를 통해)
-                    val course = findCourseByEventDetailId(request.eventDetailId)
+                    val course = eventDetailService.findCourseByEventDetailId(request.eventDetailId)
                     if (course == null) {
                         logger.warn("EventDetail 정보를 찾을 수 없음: eventDetailId=${request.eventDetailId}")
                         throw NoSuchElementException("EventDetail 정보를 찾을 수 없습니다: eventDetailId=${request.eventDetailId}")
@@ -137,10 +133,10 @@ class GpxController(
                     logger.info("S3 GPX 파일 URL: $gpxFileUrl")
 
                     // S3에서 GPX 파일 다운로드 및 파싱
-                    val gpxFileBytes = downloadGpxFromS3(gpxFileUrl)
+                    val gpxFileBytes = gpxService.downloadGpxFromS3(gpxFileUrl)
 
                     // ByteArray를 MultipartFile로 변환
-                    val multipartFile = createMultipartFileFromBytes(gpxFileBytes, "eventDetail.gpx")
+                    val multipartFile = gpxService.createMultipartFileFromBytes(gpxFileBytes, "eventDetail.gpx")
 
                     // GPX 파싱 및 Redis 저장
                     val parseResult = gpxParsingRedisService.parseAndSaveGpxFile(
@@ -220,64 +216,6 @@ class GpxController(
         } catch (e: Exception) {
             logger.error("GPS 위치 보정 실패 - 서버 오류: eventDetailId=${request.eventDetailId}", e)
             throw e // GlobalExceptionHandler가 처리하도록 위임
-        }
-    }
-
-
-    /**
-     * 대회 및 코스 유효성 확인
-     *
-     * @param userId 사용자 ID
-     * @param eventId 이벤트 ID
-     * @param eventDetailId 이벤트 상세 ID (EventDetail ID)
-     * @return 유효성 검사 결과
-     */
-    private fun validateEventAndCourse(
-        userId: Long,
-        eventId: Long,
-        eventDetailId: Long
-    ): ErrorResponse.ValidationResult {
-        return try {
-            logger.info("대회 및 코스 유효성 검사 시작: userId=$userId, eventId=$eventId, eventDetailId=$eventDetailId")
-
-            // 1. Event 정보 조회 (eventId 사용)
-            val event = eventRepository.findById(eventId)
-                .orElse(null)
-
-            if (event == null) {
-                logger.warn("Event를 찾을 수 없음: eventId=$eventId")
-                return ErrorResponse.ValidationResult(false, "EVENT_NOT_FOUND", "해당 이벤트를 찾을 수 없습니다.")
-            }
-
-            // 2. EventDetail 정보 조회 (eventDetailId를 courseId로 사용)
-            val course = eventDetailRepository.findById(eventDetailId).orElse(null)
-
-            if (course == null) {
-                logger.warn("Course를 찾을 수 없음: eventDetailId=$eventDetailId")
-                return ErrorResponse.ValidationResult(false, "COURSE_NOT_FOUND", "해당 코스를 찾을 수 없습니다.")
-            }
-
-            // 3. GPX 파싱 데이터 존재 여부 확인
-            val gpxParsingData = gpxParsingRedisService.getGpxParsingData(
-                eventId = eventId,
-                eventDetailId = eventDetailId
-            )
-
-            if (!gpxParsingData.success || gpxParsingData.points.isEmpty()) {
-                logger.warn("GPX 파싱 데이터를 찾을 수 없음: eventId=$eventId, eventDetailId=$eventDetailId")
-                return ErrorResponse.ValidationResult(false, "GPX_DATA_NOT_FOUND", "GPX 파싱 데이터를 찾을 수 없습니다.")
-            }
-
-            logger.info("대회 및 코스 유효성 검사 통과: userId=$userId, eventId=$eventId, eventDetailId=$eventDetailId")
-            logger.info("- Event: ${event.name}")
-            logger.info("- EventDetail: ${course.course}")
-            logger.info("- GPX 포인트 수: ${gpxParsingData.points.size}")
-
-            ErrorResponse.ValidationResult(true, null, null)
-
-        } catch (e: Exception) {
-            logger.error("대회 및 코스 유효성 검사 중 오류 발생: userId=$userId, eventId=$eventId, eventDetailId=$eventDetailId", e)
-            ErrorResponse.ValidationResult(false, "VALIDATION_ERROR", "검증 중 오류가 발생했습니다.")
         }
     }
 
@@ -581,401 +519,6 @@ class GpxController(
                 )
             )
         }
-    }
-
-    /**
-     * eventDetailId를 통해 EventDetail 조회
-     *
-     * @param eventDetailId 이벤트 상세 ID
-     * @return EventDetail 엔티티 또는 null
-     */
-    private fun findCourseByEventDetailId(eventDetailId: Long): EventDetail? {
-        return try {
-            // eventDetailId를 courseId로 직접 사용하여 조회
-            val course = eventDetailRepository.findById(eventDetailId)
-            if (course.isPresent) {
-                course.get()
-            } else {
-                logger.warn("EventDetail 조회 실패: courseId=$eventDetailId")
-                null
-            }
-        } catch (e: Exception) {
-            logger.error("EventDetail 조회 중 오류 발생: eventDetailId=$eventDetailId", e)
-            null
-        }
-    }
-
-    /**
-     * S3에서 GPX 파일 다운로드
-     *
-     * @param gpxFileUrl S3 GPX 파일 URL
-     * @return GPX 파일 바이트 배열
-     */
-    private fun downloadGpxFromS3(gpxFileUrl: String): ByteArray {
-        return try {
-            logger.info("S3 GPX 파일 다운로드 시작: $gpxFileUrl")
-
-            // URL에서 S3 버킷과 키 정보 추출
-            val url = java.net.URL(gpxFileUrl)
-            val urlConnection = url.openConnection()
-
-            // 파일 다운로드
-            val inputStream = urlConnection.getInputStream()
-            val gpxBytes = inputStream.readBytes()
-            inputStream.close()
-
-            logger.info("S3 GPX 파일 다운로드 완료: $gpxFileUrl, 파일 크기=${gpxBytes.size} bytes")
-            gpxBytes
-
-        } catch (e: Exception) {
-            logger.error("S3 GPX 파일 다운로드 실패: $gpxFileUrl", e)
-            throw RuntimeException("S3 GPX 파일 다운로드 실패: ${e.message}", e)
-        }
-    }
-
-    /**
-     * ByteArray를 MultipartFile로 변환
-     *
-     * @param bytes 파일 바이트 배열
-     * @param fileName 파일명
-     * @return MultipartFile 객체
-     */
-    private fun createMultipartFileFromBytes(bytes: ByteArray, fileName: String): MultipartFile {
-        return object : MultipartFile {
-            override fun getName(): String = "file"
-            override fun getOriginalFilename(): String = fileName
-            override fun getContentType(): String = "application/gpx+xml"
-            override fun isEmpty(): Boolean = bytes.isEmpty()
-            override fun getSize(): Long = bytes.size.toLong()
-            override fun getBytes(): ByteArray = bytes
-            override fun getInputStream(): java.io.InputStream = java.io.ByteArrayInputStream(bytes)
-            override fun transferTo(dest: java.io.File) {
-                dest.writeBytes(bytes)
-            }
-        }
-    }
-
-    /**
-     * 모바일 테스트용 Fake GPS 데이터 생성
-     *
-     * 5명의 유저가 GPX 경로를 따라 이동하는 GPS 데이터를 생성합니다.
-     */
-    @GetMapping("/generate-fake-gps-data")
-    @Operation(
-        summary = "모바일 테스트용 Fake GPS 데이터 생성",
-        description = "5명의 유저가 GPX 경로를 따라 이동하는 GPS 데이터를 생성합니다."
-    )
-    fun generateFakeGpsData(
-        @Parameter(description = "이벤트 ID", required = false)
-        @RequestParam(defaultValue = "1") eventId: Long,
-        @Parameter(description = "이벤트 상세 ID", required = false)
-        @RequestParam(defaultValue = "100") eventDetailId: Long,
-        @Parameter(description = "GPS 데이터 간격 (초)", required = false)
-        @RequestParam(defaultValue = "10") intervalSeconds: Int,
-        @Parameter(description = "GPS 오차 범위 (미터)", required = false)
-        @RequestParam(defaultValue = "15") errorRangeMeters: Double
-    ): ResponseEntity<Any> {
-
-        return try {
-            logger.info("Fake GPS 데이터 생성 시작: eventId=$eventId, eventDetailId=$eventDetailId")
-
-            // GPX 경로 포인트들 (기존 test_route.gpx 데이터)
-            val gpxPoints = listOf(
-                Pair(37.5413553485092, 127.115719020367),
-                Pair(37.5390881874808, 127.114029228687),
-                Pair(37.5379482005428, 127.113452553749),
-                Pair(37.5353682776934, 127.11048334837),
-                Pair(37.5351258071487, 127.110266089439),
-                Pair(37.5344154064531, 127.109783291817),
-                Pair(37.5337836971563, 127.109482884407),
-                Pair(37.5320799696497, 127.108764052391),
-                Pair(37.5317162475003, 127.108696997166),
-                Pair(37.5315503385624, 127.108699679375),
-                Pair(37.5301273352067, 127.107908427715),
-                Pair(37.5301188268838, 127.107884287834),
-                Pair(37.5266260783458, 127.1042740345),
-                Pair(37.5258773070672, 127.104005813599),
-                Pair(37.5255709893779, 127.103651762009),
-                Pair(37.5252731793075, 127.102814912796),
-                Pair(37.5235713846696, 127.101398706436)
-            )
-
-            // 5명의 테스트 유저 정보
-            val testUsers = listOf(
-                mapOf("userId" to 1, "name" to "김러너", "bibNumber" to "A001", "speedFactor" to 1.0, "delayMinutes" to 0),
-                mapOf(
-                    "userId" to 2,
-                    "name" to "이스피드",
-                    "bibNumber" to "A002",
-                    "speedFactor" to 1.2,
-                    "delayMinutes" to 2
-                ),
-                mapOf(
-                    "userId" to 3,
-                    "name" to "박마라톤",
-                    "bibNumber" to "A003",
-                    "speedFactor" to 0.9,
-                    "delayMinutes" to 1
-                ),
-                mapOf("userId" to 4, "name" to "최러닝", "bibNumber" to "A004", "speedFactor" to 1.1, "delayMinutes" to 3),
-                mapOf("userId" to 5, "name" to "정트랙", "bibNumber" to "A005", "speedFactor" to 0.8, "delayMinutes" to 5)
-            )
-
-            val usersGpsData = mutableListOf<Map<String, Any>>()
-
-            testUsers.forEach { user ->
-                val userId = user["userId"] as Int
-                val name = user["name"] as String
-                val bibNumber = user["bibNumber"] as String
-                val speedFactor = user["speedFactor"] as Double
-                val delayMinutes = user["delayMinutes"] as Int
-
-                // 각 유저의 GPS 데이터 생성
-                val gpsDataList = generateUserGpsData(
-                    gpxPoints = gpxPoints,
-                    speedFactor = speedFactor,
-                    delayMinutes = delayMinutes,
-                    intervalSeconds = intervalSeconds,
-                    errorRangeMeters = errorRangeMeters
-                )
-
-                usersGpsData.add(
-                    mapOf(
-                        "userId" to userId,
-                        "name" to name,
-                        "bibNumber" to bibNumber,
-                        "eventId" to eventId,
-                        "eventDetailId" to eventDetailId,
-                        "totalPoints" to gpsDataList.size,
-                        "estimatedDurationMinutes" to (gpsDataList.size * intervalSeconds / 60),
-                        "gpsData" to gpsDataList
-                    )
-                )
-            }
-
-            val response = mapOf(
-                "success" to true,
-                "message" to "Fake GPS 데이터 생성 완료",
-                "totalUsers" to usersGpsData.size,
-                "intervalSeconds" to intervalSeconds,
-                "errorRangeMeters" to errorRangeMeters,
-                "routeInfo" to mapOf(
-                    "totalPoints" to gpxPoints.size,
-                    "estimatedDistance" to "2.4km",
-                    "startPoint" to mapOf("lat" to gpxPoints.first().first, "lng" to gpxPoints.first().second),
-                    "endPoint" to mapOf("lat" to gpxPoints.last().first, "lng" to gpxPoints.last().second)
-                ),
-                "users" to usersGpsData
-            )
-
-            logger.info("Fake GPS 데이터 생성 완료: ${usersGpsData.size}명 유저")
-            ResponseEntity.ok(ApiResponse(data = response))
-
-        } catch (e: IllegalArgumentException) {
-            logger.warn("Fake GPS 데이터 생성 실패", e)
-            return ResponseEntity.badRequest().body(
-                ErrorResponse.create(
-                    HttpStatus.BAD_REQUEST,
-                    ErrorCode.INVALID_INPUT_VALUE,
-                    e.message ?: ErrorCode.INVALID_INPUT_VALUE.message
-                )
-            )
-        } catch (e: Exception) {
-            logger.error("Fake GPS 데이터 생성 실패", e)
-            return ResponseEntity.internalServerError().body(
-                ErrorResponse.create(
-                    HttpStatus.INTERNAL_SERVER_ERROR,
-                    ErrorCode.API_BAD_REQUEST,
-                    e.message ?: ErrorCode.API_BAD_REQUEST.message
-                )
-            )
-        }
-    }
-
-    /**
-     * 개별 유저의 GPS 데이터 생성 (순차 진행)
-     */
-    private fun generateUserGpsData(
-        gpxPoints: List<Pair<Double, Double>>,
-        speedFactor: Double,
-        delayMinutes: Int,
-        intervalSeconds: Int,
-        errorRangeMeters: Double
-    ): List<Map<String, Any>> {
-
-        val gpsDataList = mutableListOf<Map<String, Any>>()
-        val startTime = System.currentTimeMillis() + (delayMinutes * 60 * 1000)
-
-        // 전체 경로 길이 계산
-        val totalDistance = calculateTotalDistance(gpxPoints)
-
-        // 유저의 평균 속도 계산 (km/h를 m/s로 변환)
-        val baseSpeedKmh = 5.0 + (Math.random() * 3.0) // 5-8 km/h
-        val userSpeedKmh = baseSpeedKmh * speedFactor
-        val userSpeedMs = userSpeedKmh * 1000.0 / 3600.0 // m/s로 변환
-
-        // 목표 총 소요시간 계산 (초)
-        val totalTimeSeconds = (totalDistance / userSpeedMs).toInt()
-
-        // 전체 경로에서 일정한 간격으로 포인트 생성
-        val totalPoints = (totalTimeSeconds / intervalSeconds).coerceAtLeast(10)
-
-        // 경로상의 거리 간격 계산
-        val distanceInterval = totalDistance / totalPoints
-
-        logger.info(
-            "유저 GPS 데이터 생성: 총거리=${totalDistance}m, 속도=${userSpeedKmh}km/h, " +
-                    "총시간=${totalTimeSeconds}초, 포인트수=${totalPoints}개"
-        )
-
-        var currentDistance = 0.0
-        var currentTime = 0L
-
-        for (pointIndex in 0 until totalPoints) {
-            // 현재 거리에서의 위치 계산
-            val locationInfo = getLocationAtDistance(gpxPoints, currentDistance)
-
-            if (locationInfo != null) {
-                val (lat, lng, bearing) = locationInfo
-
-                // 진행 방향에 맞는 작은 GPS 오차 추가 (경로를 크게 벗어나지 않도록)
-                val maxErrorMeters = minOf(errorRangeMeters, 10.0) // 최대 10m 오차
-                val errorLat = (Math.random() - 0.5) * 2 * (maxErrorMeters / 111000.0)
-                val errorLng = (Math.random() - 0.5) * 2 * (maxErrorMeters / (111000.0 * Math.cos(Math.toRadians(lat))))
-
-                val finalLat = lat + errorLat
-                val finalLng = lng + errorLng
-
-                // 시간 계산
-                val timestamp = startTime + currentTime * 1000
-
-                // 고도 계산 (점진적 변화)
-                val altitude = 10.0 + (Math.sin(pointIndex * 0.1) * 5.0) + (Math.random() * 2.0)
-
-                // 정확도 계산 (3-8m 범위)
-                val accuracy = 3.0 + (Math.random() * 5.0)
-
-                gpsDataList.add(
-                    mapOf(
-                        "lat" to finalLat,
-                        "lng" to finalLng,
-                        "altitude" to altitude,
-                        "accuracy" to accuracy,
-                        "speed" to userSpeedKmh,
-                        "bearing" to bearing,
-                        "timestamp" to java.time.Instant.ofEpochMilli(timestamp).toString(),
-                        "distanceFromStart" to currentDistance,
-                        "progressPercent" to (currentDistance / totalDistance * 100).toInt()
-                    )
-                )
-
-                // 다음 포인트로 이동
-                currentDistance += distanceInterval
-                currentTime += intervalSeconds
-            }
-        }
-
-        logger.info("유저 GPS 데이터 생성 완료: 실제 생성된 포인트 수=${gpsDataList.size}")
-        return gpsDataList
-    }
-
-    /**
-     * 전체 경로 길이 계산
-     */
-    private fun calculateTotalDistance(gpxPoints: List<Pair<Double, Double>>): Double {
-        var totalDistance = 0.0
-        for (i in 0 until gpxPoints.size - 1) {
-            val currentPoint = gpxPoints[i]
-            val nextPoint = gpxPoints[i + 1]
-            totalDistance += calculateDistance(
-                currentPoint.first, currentPoint.second,
-                nextPoint.first, nextPoint.second
-            )
-        }
-        return totalDistance
-    }
-
-    /**
-     * 특정 거리에서의 위치 및 방향 계산
-     */
-    private fun getLocationAtDistance(
-        gpxPoints: List<Pair<Double, Double>>,
-        targetDistance: Double
-    ): Triple<Double, Double, Double>? {
-
-        if (gpxPoints.isEmpty()) return null
-
-        var accumulatedDistance = 0.0
-
-        for (i in 0 until gpxPoints.size - 1) {
-            val currentPoint = gpxPoints[i]
-            val nextPoint = gpxPoints[i + 1]
-
-            val segmentDistance = calculateDistance(
-                currentPoint.first, currentPoint.second,
-                nextPoint.first, nextPoint.second
-            )
-
-            if (accumulatedDistance + segmentDistance >= targetDistance) {
-                // 이 세그먼트 내에서 목표 거리에 해당하는 위치 찾기
-                val remainingDistance = targetDistance - accumulatedDistance
-                val ratio = if (segmentDistance > 0) remainingDistance / segmentDistance else 0.0
-
-                // 보간된 위치 계산
-                val lat = currentPoint.first + (nextPoint.first - currentPoint.first) * ratio
-                val lng = currentPoint.second + (nextPoint.second - currentPoint.second) * ratio
-
-                // 방향 계산
-                val bearing = calculateBearing(
-                    currentPoint.first, currentPoint.second,
-                    nextPoint.first, nextPoint.second
-                )
-
-                return Triple(lat, lng, bearing)
-            }
-
-            accumulatedDistance += segmentDistance
-        }
-
-        // 마지막 포인트 반환
-        val lastPoint = gpxPoints.last()
-        val secondLastPoint = if (gpxPoints.size > 1) gpxPoints[gpxPoints.size - 2] else lastPoint
-        val lastBearing = calculateBearing(
-            secondLastPoint.first, secondLastPoint.second,
-            lastPoint.first, lastPoint.second
-        )
-
-        return Triple(lastPoint.first, lastPoint.second, lastBearing)
-    }
-
-    /**
-     * 두 지점 간 거리 계산 (미터)
-     */
-    private fun calculateDistance(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {
-        val R = 6371000.0 // 지구 반지름 (미터)
-        val dLat = Math.toRadians(lat2 - lat1)
-        val dLng = Math.toRadians(lng2 - lng1)
-        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
-                Math.sin(dLng / 2) * Math.sin(dLng / 2)
-        val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-        return R * c
-    }
-
-    /**
-     * 두 지점 간 방향 계산 (도)
-     */
-    private fun calculateBearing(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {
-        val dLng = Math.toRadians(lng2 - lng1)
-        val lat1Rad = Math.toRadians(lat1)
-        val lat2Rad = Math.toRadians(lat2)
-
-        val y = Math.sin(dLng) * Math.cos(lat2Rad)
-        val x = Math.cos(lat1Rad) * Math.sin(lat2Rad) -
-                Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLng)
-
-        val bearing = Math.toDegrees(Math.atan2(y, x))
-        return (bearing + 360) % 360
     }
 }
 
