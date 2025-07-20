@@ -2,47 +2,6 @@ package com.sponovation.runtrack.dto
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import io.swagger.v3.oas.annotations.media.Schema
-import jakarta.validation.constraints.*
-
-/**
- * 이벤트 상세 생성 요청 DTO
- */
-@Schema(description = "이벤트 상세 생성 요청")
-data class EventDetailRequestDto(
-    @Schema(description = "이벤트 ID", example = "1", required = true)
-    @JsonProperty("eventId")
-    @field:NotNull(message = "이벤트 ID는 필수입니다")
-    @field:Positive(message = "이벤트 ID는 양수여야 합니다")
-    val eventId: Long,
-
-    @Schema(description = "이벤트 상세ID", example = "100", required = true)
-    @JsonProperty("eventDetailId")
-    @field:NotNull(message = "이벤트 ID는 필수입니다")
-    @field:Positive(message = "이벤트 ID는 양수여야 합니다")
-    val eventDetailId: Long,
-)
-
-/**
- * 이벤트 상세 수정 요청 DTO
- */
-@Schema(description = "이벤트 상세 수정 요청")
-data class UpdateEventDetailRequestDto(
-    @Schema(description = "코스 거리", example = "10")
-    @JsonProperty("distance")
-    @field:Positive(message = "거리는 양수여야 합니다")
-    @field:Max(value = 1000, message = "거리는 1000000를 초과할 수 없습니다")
-    val distance: Int? = null,
-
-    @Schema(description = "코스명", example = "10km")
-    @JsonProperty("course")
-    @field:Size(max = 30, message = "코스명은 30자를 초과할 수 없습니다")
-    val course: String? = null,
-
-    @Schema(description = "GPX 파일 URL", example = "https://example.com/course.gpx")
-    @JsonProperty("gpxFile")
-    @field:Size(max = 255, message = "GPX 파일 URL은 255자를 초과할 수 없습니다")
-    val gpxFile: String? = null
-)
 
 /**
  * 대회 상세 조회 응답 DTO

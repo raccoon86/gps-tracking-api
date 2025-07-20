@@ -3,10 +3,6 @@ package com.sponovation.runtrack.service
 import org.slf4j.LoggerFactory
 import org.springframework.data.redis.core.RedisTemplate
 import org.springframework.stereotype.Service
-import java.time.Instant
-import java.time.LocalDateTime
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 
 /**
@@ -58,13 +54,6 @@ class CheckpointTimesService(
         val key = generatePreviousLocationKey(userId, eventId, eventDetailId)
         
         try {
-            val locationData = PreviousLocationData(
-                latitude = latitude,
-                longitude = longitude,
-                altitude = altitude,
-                timestamp = timestamp,
-                distanceFromStart = distanceFromStart
-            )
             
             // JSON 형태로 저장
             val locationJson = "{\"latitude\":$latitude,\"longitude\":$longitude,\"altitude\":$altitude,\"timestamp\":$timestamp,\"distanceFromStart\":$distanceFromStart}"

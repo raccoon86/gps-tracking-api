@@ -21,7 +21,6 @@ class EventDetailService(
     private val eventRepository: EventRepository,
     private val eventDetailRepository: EventDetailRepository,
     private val participantRepository: ParticipantRepository,
-    private val trackerRepository: TrackerRepository,
     private val trackerService: TrackerService,
     private val leaderboardService: LeaderboardService,
     private val redisTemplate: RedisTemplate<String, Any>
@@ -190,7 +189,7 @@ class EventDetailService(
             logger.info("테스트 EventDetail 생성 완료: eventDetailId=${savedEventDetail.id}")
             
             return CreateTestCourseResponseDto(
-                eventDetailId = savedEventDetail.id!!,
+                eventDetailId = savedEventDetail.id,
                 eventId = savedEventDetail.eventId,
                 distance = savedEventDetail.distance,
                 course = savedEventDetail.course ?: "",
@@ -207,16 +206,6 @@ class EventDetailService(
             throw e
         }
     }
-    
-    /**
-     * EventDetail 존재 여부 확인
-     */
-    @Transactional(readOnly = true)
-    fun existsById(eventDetailId: Long): Boolean {
-        return eventDetailRepository.existsById(eventDetailId)
-    }
-
-    // ========== Private Helper Methods ==========
 
     /**
      * 코스 정보 조회
@@ -305,7 +294,7 @@ class EventDetailService(
             }
 
             // 상위 랭커 정보 구성 (participants 테이블에서 실제 데이터 조회)
-            val topRankers = topRankersWithScores.mapIndexedNotNull { index, (userId, score) ->
+            val topRankers = topRankersWithScores.mapIndexedNotNull { index, (userId) ->
                 try {
                     // participants 테이블에서 참가자 정보 조회
                     val participant = participantRepository.findByEventDetailIdAndUserId(eventDetailId, userId)

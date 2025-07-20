@@ -21,7 +21,6 @@ import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import org.springframework.web.multipart.MultipartFile
 import com.sponovation.runtrack.repository.EventRepository
-import org.springframework.data.redis.core.RedisTemplate
 import com.sponovation.runtrack.enums.ErrorCode
 import com.sponovation.runtrack.common.ErrorResponse
 import com.sponovation.runtrack.service.EventDetailService
@@ -461,16 +460,12 @@ class GpxController(
     fun uploadGpx(
         @Parameter(description = "업로드할 GPX 파일", required = true)
         @RequestPart("file") file: MultipartFile,
-        @Parameter(description = "사용자 ID", required = true)
-        @RequestParam("userId") userId: Long,
         @Parameter(description = "이벤트 ID", required = true)
         @RequestParam("eventId") eventId: Long,
         @Parameter(description = "이벤트 상세 ID", required = true)
         @RequestParam("eventDetailId") eventDetailId: Long,
         @Parameter(description = "경로 이름", required = true)
         @RequestParam("routeName") routeName: String,
-        @Parameter(description = "경로 설명")
-        @RequestParam("description", required = false, defaultValue = "") description: String
     ): ResponseEntity<Any> {
 
         return try {
@@ -500,7 +495,7 @@ class GpxController(
                 courseId = "course_${eventId}_${eventDetailId}",
                 routeId = 0L, // GpxRoute 엔티티 삭제로 기본값 사용
                 routeName = routeName, // 파라미터에서 받은 이름 사용
-                totalDistance = parseResult.totalDistance ?: 0.0,
+                totalDistance = parseResult.totalDistance,
                 totalPoints = parseResult.totalPoints,
                 createdAt = java.time.LocalDateTime.now().toString()
             )
