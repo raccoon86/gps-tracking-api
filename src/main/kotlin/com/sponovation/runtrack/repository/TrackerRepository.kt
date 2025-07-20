@@ -66,6 +66,7 @@ interface TrackerRepository : JpaRepository<Tracker, Long> {
         SELECT 
             p.id as participantId,
             p.name as name,
+            p.nickname as nickname,
             p.bibNumber as bibNumber,
             p.country as country,
             p.profileImageUrl as profileImage,
