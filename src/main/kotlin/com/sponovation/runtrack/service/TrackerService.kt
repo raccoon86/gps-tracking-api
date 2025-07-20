@@ -97,6 +97,7 @@ class TrackerService(
             TrackedParticipantDto(
                 participantId = projection.getParticipantId(),
                 name = projection.getName(),
+                nickname = projection.getNickname(),
                 bibNumber = projection.getBibNumber(),
                 country = projection.getCountry(),
                 profileImage = projection.getProfileImage(),
