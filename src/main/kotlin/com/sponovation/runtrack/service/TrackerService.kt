@@ -4,7 +4,6 @@ import com.sponovation.runtrack.domain.Tracker
 import com.sponovation.runtrack.dto.*
 import com.sponovation.runtrack.repository.ParticipantRepository
 import com.sponovation.runtrack.repository.TrackerRepository
-import com.sponovation.runtrack.repository.TrackedParticipantProjection
 import com.sponovation.runtrack.repository.UserRepository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -14,7 +13,6 @@ import org.springframework.transaction.annotation.Transactional
 class TrackerService(
     private val trackerRepository: TrackerRepository,
     private val participantRepository: ParticipantRepository,
-    private val userRepository: UserRepository
 ) {
 
     /**
@@ -64,6 +62,7 @@ class TrackerService(
             TrackedParticipantDto(
                 participantId = projection.getParticipantId(),
                 name = projection.getName(),
+                nickname = projection.getNickname(),
                 bibNumber = projection.getBibNumber(),
                 country = projection.getCountry(),
                 profileImage = projection.getProfileImage(),

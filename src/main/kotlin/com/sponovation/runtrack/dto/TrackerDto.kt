@@ -3,6 +3,7 @@ package com.sponovation.runtrack.dto
 import com.fasterxml.jackson.annotation.JsonProperty
 import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.constraints.*
+import javax.annotation.meta.TypeQualifierNickname
 
 /**
  * 트래킹 추가 요청 DTO
@@ -76,6 +77,10 @@ data class TrackedParticipantDto(
     @Schema(description = "참가자 이름", example = "김마라톤")
     @JsonProperty("name")
     val name: String?,
+
+    @Schema(description = "참가자 닉네임", example = "김마라톤")
+    @JsonProperty("nickname")
+    val nickname: String?,
 
     @Schema(description = "배번", example = "A001")
     @JsonProperty("bibNumber")

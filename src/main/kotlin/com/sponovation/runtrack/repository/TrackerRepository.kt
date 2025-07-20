@@ -1,6 +1,5 @@
 package com.sponovation.runtrack.repository
 
-import com.sponovation.runtrack.domain.Participant
 import com.sponovation.runtrack.domain.Tracker
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Modifying

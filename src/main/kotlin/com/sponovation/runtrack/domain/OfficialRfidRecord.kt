@@ -1,7 +1,5 @@
 package com.sponovation.runtrack.domain
 
-import com.sponovation.runtrack.enums.CheckpointType
-import com.sponovation.runtrack.enums.CheckpointDetails
 import jakarta.persistence.*
 import org.springframework.data.annotation.CreatedDate
 import org.springframework.data.annotation.LastModifiedDate

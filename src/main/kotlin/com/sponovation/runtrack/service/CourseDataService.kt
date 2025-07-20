@@ -1,13 +1,9 @@
 package com.sponovation.runtrack.service
 
-import com.fasterxml.jackson.annotation.JsonFormat
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.sponovation.runtrack.service.GpxParsingException
 import com.sponovation.runtrack.util.GeoUtils
-import io.jenetics.jpx.WayPoint
 import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.redis.core.RedisTemplate
 import org.springframework.stereotype.Service
@@ -15,7 +11,6 @@ import software.amazon.awssdk.core.ResponseInputStream
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.GetObjectRequest
 import software.amazon.awssdk.services.s3.model.GetObjectResponse
-import java.time.LocalDateTime
 import java.util.*
 import java.util.concurrent.TimeUnit
 
@@ -23,8 +18,6 @@ import java.util.concurrent.TimeUnit
 class CourseDataService(
     private val s3Client: S3Client,
     val redisTemplate: RedisTemplate<String, Any>,
-    private val gpxParsingService: GpxParsingService,
-    private val routeInterpolationService: RouteInterpolationService,
     private val objectMapper: ObjectMapper
 ) {
 
@@ -140,32 +133,6 @@ class CourseDataService(
             return null
         }
     }
-
-    /**
-     * 코스 ID를 생성합니다.
-     */
-    private fun generateCourseId(eventId: Long, fileName: String): String {
-        return "course_${eventId}_${UUID.randomUUID().toString().substring(0, 8)}"
-    }
-
-    /**
-     * 웨이포인트 목록의 총 거리를 계산합니다.
-     */
-    private fun calculateTotalDistance(waypoints: List<ParsedGpxWaypoint>): Double {
-        if (waypoints.size < 2) return 0.0
-        
-        var totalDistance = 0.0
-        for (i in 1 until waypoints.size) {
-            val prevPoint = waypoints[i - 1]
-            val currentPoint = waypoints[i]
-            totalDistance += GeoUtils.calculateDistance(
-                prevPoint.latitude, prevPoint.longitude,
-                currentPoint.latitude, currentPoint.longitude
-            )
-        }
-        
-        return totalDistance / 1000.0 // 킬로미터로 변환
-    }
 }
 
 /**
@@ -180,14 +147,6 @@ data class CourseData(
     val totalPoints: Int,
     val interpolatedPoints: List<InterpolatedPoint>,
     val createdAt: String
-)
-
-/**
- * 이벤트 코스 정보
- */
-data class EventCourse(
-    val eventId: Long,
-    val gpxFileName: String
 )
 
 /**
