@@ -24,7 +24,7 @@ data class Event(
      */
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    val id: Long = 0,
+    val id: Long = 0L,
 
     /** 
      * 이벤트 이름
@@ -34,7 +34,7 @@ data class Event(
     @field:NotBlank(message = "이벤트 이름은 필수입니다")
     @field:Size(max = 255, message = "이벤트 이름은 255자를 초과할 수 없습니다")
     @Column(name = "name", length = 255)
-    val name: String,
+    val name: String? = null,
 
     /** 
      * 스포츠 종목
@@ -49,16 +49,16 @@ data class Event(
      * 이벤트가 시작되는 정확한 날짜와 시간
      */
     @field:NotNull(message = "시작 일시는 필수입니다")
-    @Column(name = "start_date_time", nullable = false)
-    val startDateTime: LocalDateTime,
+    @Column(name = "start_date_time")
+    val startDateTime: LocalDateTime? = null,
 
     /** 
      * 이벤트 종료 일시
      * 이벤트가 종료되는 정확한 날짜와 시간
      */
     @field:NotNull(message = "종료 일시는 필수입니다")
-    @Column(name = "end_date_time", nullable = false)
-    val endDateTime: LocalDateTime,
+    @Column(name = "end_date_time")
+    val endDateTime: LocalDateTime? = null,
 
     /** 
      * 국가
@@ -66,8 +66,8 @@ data class Event(
      */
     @field:NotBlank(message = "국가는 필수입니다")
     @field:Size(max = 20, message = "국가는 20자를 초과할 수 없습니다")
-    @Column(name = "country", length = 20, nullable = false)
-    val country: String,
+    @Column(name = "country", length = 20)
+    val country: String? = null,
 
     /** 
      * 도시
@@ -158,21 +158,14 @@ data class Event(
         val now = LocalDateTime.now()
         return now.isBefore(startDateTime)
     }
-    
+
     /**
      * 이벤트 기간이 유효한지 확인 (시작일시가 종료일시보다 빠른지)
      */
     fun hasValidTimeRange(): Boolean {
-        return startDateTime.isBefore(endDateTime)
+        return startDateTime!!.isBefore(endDateTime)
     }
-    
-    /**
-     * GPS 좌표가 설정되어 있는지 확인
-     */
-    fun hasGpsCoordinates(): Boolean {
-        return latitude != null && longitude != null
-    }
-    
+
     /**
      * 엔티티 생성/수정 시 시간 범위 유효성 검증
      */

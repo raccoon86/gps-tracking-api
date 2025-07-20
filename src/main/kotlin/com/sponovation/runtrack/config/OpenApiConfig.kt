@@ -22,7 +22,7 @@ class OpenApiConfig {
         return OpenAPI()
             .info(
                 Info()
-                    .title("RunTrack API")
+                    .title("MyPB-Venue API")
                     .description("GPS 기반 러닝 트래킹 및 GPX 파일 처리를 위한 REST API")
                     .version("v1.0.0")
                     .contact(

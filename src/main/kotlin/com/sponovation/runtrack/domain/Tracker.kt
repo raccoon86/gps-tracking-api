@@ -43,17 +43,8 @@ data class Tracker(
      */
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    val id: Long = 0,
-
-    /**
-     * 사용자 ID (Foreign Key)
-     * 트래킹을 수행하는 사용자의 고유 식별자
-     */
-    @field:NotNull(message = "사용자 ID는 필수입니다")
-    @field:Positive(message = "사용자 ID는 양수여야 합니다")
-    @Column(name = "user_id", nullable = false)
-    val userId: Long,
-
+    val id: Long = 0L,
+    
     /**
      * 이벤트 ID (Foreign Key)
      * 트래킹 대상이 되는 이벤트의 고유 식별자
@@ -71,6 +62,15 @@ data class Tracker(
     @field:Positive(message = "이벤트 상세 ID는 양수여야 합니다")
     @Column(name = "event_detail_id", nullable = false)
     val eventDetailId: Long,
+
+    /**
+     * 사용자 ID (Foreign Key)
+     * 트래킹을 수행하는 사용자의 고유 식별자
+     */
+    @field:NotNull(message = "사용자 ID는 필수입니다")
+    @field:Positive(message = "사용자 ID는 양수여야 합니다")
+    @Column(name = "user_id", nullable = false)
+    val userId: Long,
 
     /**
      * 참가자 ID (Foreign Key)

@@ -55,12 +55,7 @@ class RedisManagementService(
      * @throws IllegalArgumentException 확인 문자열이 일치하지 않을 경우
      * @throws RuntimeException Redis 작업 중 오류가 발생할 경우
      */
-    fun deleteAllKeys(confirmDelete: String): Long {
-        // 보안 확인: 정확한 확인 문자열 검증
-        if (confirmDelete != "CONFIRM_DELETE_ALL") {
-            logger.warn("Redis 전체 삭제 시도 실패: 잘못된 확인 문자열 - '$confirmDelete'")
-            throw IllegalArgumentException("삭제를 확인하려면 정확한 확인 문자열을 입력해야 합니다.")
-        }
+    fun deleteAllKeys(): Long {
         
         return try {
             logger.warn("=== Redis 전체 키 삭제 시작 ===")

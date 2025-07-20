@@ -3,20 +3,15 @@ package com.sponovation.runtrack.service
 import com.sponovation.runtrack.dto.*
 import com.sponovation.runtrack.algorithm.KalmanFilter
 import com.sponovation.runtrack.algorithm.MapMatcher
+import com.sponovation.runtrack.algorithm.MatchResult
 import com.sponovation.runtrack.util.GeoUtils
-import com.sponovation.runtrack.repository.CheckpointRepository
-import com.sponovation.runtrack.repository.CourseRepository
-import com.sponovation.runtrack.domain.Checkpoint
-import io.jenetics.jpx.GPX
 import io.jenetics.jpx.Track
 import io.jenetics.jpx.WayPoint
 import org.slf4j.LoggerFactory
 import org.springframework.data.redis.core.RedisTemplate
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
-import org.springframework.web.multipart.MultipartFile
 import java.time.Instant
-import java.time.LocalDateTime
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.*
@@ -78,9 +73,7 @@ import java.util.concurrent.TimeUnit
 @Service
 @Transactional(readOnly = true)
 class GpxService(
-    private val checkpointRepository: CheckpointRepository,
     private val realtimeLocationService: RealtimeLocationService,
-    private val courseRepository: CourseRepository,
     private val courseDataService: CourseDataService,
     private val redisTemplate: RedisTemplate<String, String>,
     private val checkpointTimesService: CheckpointTimesService,
@@ -526,360 +519,6 @@ class GpxService(
     }
 
     /**
-     * GPX 파일을 파싱하여 DB와 Redis에 통합 저장 (최적화된 단일 파싱)
-     *
-     * 이 메서드는 GPX 파일을 한 번만 파싱하여 다음 작업을 수행합니다:
-     * 1. GPX 파일 파싱 및 100미터 간격 보간
-     * 2. 데이터베이스에 GpxRoute 및 GpxWaypoint 저장
-     * 3. Redis에 CourseData 저장 (실시간 위치 보정용)
-     * 4. 체크포인트 자동 생성
-     *
-     * @param file 업로드된 GPX 파일
-     * @param routeName 경로명
-     * @param description 경로 설명
-     * @param eventDetailId 이벤트 상세 ID (Redis 저장용)
-     * @return 통합 업로드 결과
-     */
-    fun parseAndSaveGpxFileWithCourseData(
-        file: MultipartFile,
-        routeName: String,
-        description: String,
-        eventDetailId: Long
-    ): GpxUploadResult {
-        logger.info(
-            "GPX 파일 통합 처리 시작: 파일명={}, 크기={} bytes, 경로명={}, 이벤트ID={}",
-            file.originalFilename, file.size, routeName, eventDetailId
-        )
-
-        val startTime = System.currentTimeMillis()
-
-        // 파일 크기 및 형식 검증
-        if (file.isEmpty) {
-            logger.error("빈 파일 업로드 시도: 파일명={}", file.originalFilename)
-            throw IllegalArgumentException("업로드된 파일이 비어있습니다")
-        }
-
-        if (file.size > 10 * 1024 * 1024) { // 10MB 제한
-            logger.error("파일 크기 초과: 파일명={}, 크기={} bytes", file.originalFilename, file.size)
-            throw IllegalArgumentException("파일 크기가 너무 큽니다 (최대 10MB)")
-        }
-
-        logger.debug("파일 검증 완료: 파일명={}", file.originalFilename)
-
-        // 임시 파일 생성 (GPX 라이브러리가 파일 경로를 필요로 하기 때문)
-        val tempFile = try {
-            java.io.File.createTempFile("gpx", ".gpx")
-        } catch (e: Exception) {
-            logger.error("임시 파일 생성 실패: {}", e.message, e)
-            throw RuntimeException("임시 파일 생성에 실패했습니다: ${e.message}", e)
-        }
-
-        logger.debug("임시 파일 생성 완료: {}", tempFile.absolutePath)
-
-        try {
-            // 업로드된 파일을 임시 파일로 복사
-            file.transferTo(tempFile)
-            logger.debug("파일 복사 완료: {} -> {}", file.originalFilename, tempFile.absolutePath)
-
-            // GPX 파일 파싱
-            val gpx = try {
-                logger.debug("GPX 파일 파싱 시작")
-                GPX.read(tempFile.toPath())
-            } catch (e: Exception) {
-                logger.error("GPX 파일 파싱 실패: 파일명={}, 오류={}", file.originalFilename, e.message, e)
-                throw IllegalArgumentException("GPX 파일 파싱에 실패했습니다. 올바른 GPX 형식인지 확인해주세요: ${e.message}", e)
-            }
-
-            logger.debug("GPX 파일 파싱 완료")
-
-            // 트랙 데이터 검증
-            val tracks = gpx.tracks.toList()
-            if (tracks.isEmpty()) {
-                logger.error("트랙 데이터 없음: 파일명={}", file.originalFilename)
-                throw IllegalArgumentException("GPX 파일에 트랙 데이터가 없습니다")
-            }
-
-            logger.debug("트랙 개수: {}", tracks.size)
-
-            // 첫 번째 트랙 선택
-            val track = tracks.first()
-            val segments = track.segments.toList()
-            if (segments.isEmpty()) {
-                logger.error("세그먼트 데이터 없음: 파일명={}", file.originalFilename)
-                throw IllegalArgumentException("GPX 파일에 세그먼트 데이터가 없습니다")
-            }
-
-            logger.debug("세그먼트 개수: {}", segments.size)
-
-            // 트랙에서 웨이포인트 추출 (100미터 간격 보간 포함)
-            val waypoints = extractWaypointsFromTrack(track)
-            logger.info("웨이포인트 추출 완료: {}개 (보간 포함)", waypoints.size)
-
-            // 웨이포인트 최소 개수 검증
-            if (waypoints.size < 2) {
-                logger.error("웨이포인트 개수 부족: {}개 (최소 2개 필요)", waypoints.size)
-                throw IllegalArgumentException("경로를 생성하기 위해서는 최소 2개 이상의 웨이포인트가 필요합니다 (현재: ${waypoints.size}개)")
-            }
-
-            // 경로 통계 계산 (총 거리, 고도 변화 등)
-            logger.debug("경로 통계 계산 시작")
-            val routeStats = calculateRouteStatistics(waypoints)
-            logger.info(
-                "경로 통계 계산 완료: 총거리={:.1f}m, 고도상승={:.1f}m, 고도하강={:.1f}m",
-                routeStats.totalDistance, routeStats.elevationGain, routeStats.elevationLoss
-            )
-
-            // 최소 거리 검증
-            if (routeStats.totalDistance < 10.0) { // 10미터 미만
-                logger.error("경로 거리 부족: {:.1f}m (최소 10m 필요)", routeStats.totalDistance)
-                throw IllegalArgumentException(
-                    "경로가 너무 짧습니다 (최소 10m 이상 필요, 현재: ${
-                        String.format(
-                            "%.1f",
-                            routeStats.totalDistance
-                        )
-                    }m)"
-                )
-            }
-
-            // 1. GPX 경로 엔티티 생성 및 저장
-            // logger.debug("GPX 경로 엔티티 저장 시작")
-            // val gpxRoute = gpxRouteRepository.save(
-            //     GpxRoute(
-            //         name = routeName,
-            //         description = description,
-            //         totalDistance = routeStats.totalDistance,
-            //         totalElevationGain = routeStats.elevationGain,
-            //         totalElevationLoss = routeStats.elevationLoss,
-            //         createdAt = LocalDateTime.now()
-            //     )
-            // )
-            // logger.info("GPX 경로 저장 완료: ID={}, 이름={}", gpxRoute.id, gpxRoute.name)
-
-            // 2. 웨이포인트 데이터를 DB에 저장
-            // logger.debug("웨이포인트 저장 시작: {}개", waypoints.size)
-            // saveWaypoints(gpxRoute, waypoints)
-            // logger.info("웨이포인트 저장 완료: {}개", waypoints.size)
-
-            // 3. 자동 체크포인트 생성
-            // logger.debug("체크포인트 자동 생성 시작")
-            // generateAutoCheckpoints(gpxRoute, waypoints)
-
-            // 4. Redis에 코스 데이터 저장 (파싱된 웨이포인트 재사용)
-            logger.debug("Redis에 코스 데이터 저장 시작")
-            val courseId = courseDataService.saveFromParsedWaypoints(
-                eventId = eventDetailId,
-                fileName = file.originalFilename ?: "unknown.gpx",
-                waypoints = waypoints
-            )
-            logger.info("Redis 코스 데이터 저장 완료: courseId={}", courseId)
-
-            val processingTime = System.currentTimeMillis() - startTime
-            logger.info(
-                "GPX 파일 통합 처리 완료: 처리시간={}ms, 경로ID={}, 코스ID={}, 웨이포인트={}개, 총거리={:.1f}m",
-                processingTime, "N/A", courseId, waypoints.size, routeStats.totalDistance
-            )
-
-            return GpxUploadResult(
-                gpxRoute = null, // GpxRoute 엔티티가 삭제되어 null 반환
-                courseId = courseId,
-                totalInterpolatedPoints = waypoints.size,
-                createdAt = LocalDateTime.now().toString()
-            )
-
-        } catch (e: IllegalArgumentException) {
-            logger.warn("GPX 파일 처리 실패 (검증 오류): {}", e.message)
-            throw e
-        } catch (e: Exception) {
-            logger.error("GPX 파일 처리 중 예상치 못한 오류 발생: {}", e.message, e)
-            throw RuntimeException("GPX 파일 처리 중 오류가 발생했습니다: ${e.message}", e)
-        } finally {
-            // 임시 파일 정리
-            try {
-                if (tempFile.exists()) {
-                    val deleted = tempFile.delete()
-                    if (deleted) {
-                        logger.debug("임시 파일 삭제 완료: {}", tempFile.absolutePath)
-                    } else {
-                        logger.warn("임시 파일 삭제 실패: {}", tempFile.absolutePath)
-                    }
-                }
-            } catch (e: Exception) {
-                logger.warn("임시 파일 삭제 중 오류 발생: {}", e.message)
-            }
-        }
-    }
-
-    /**
-     * GPX 파일을 파싱하여 경로 데이터를 저장
-     *
-     * @param file 업로드된 GPX 파일
-     * @param routeName 경로명
-     * @param description 경로 설명
-     * @return 저장된 GpxRoute 엔티티
-     * @throws IllegalArgumentException GPX 파일에 트랙 데이터가 없는 경우
-     */
-    fun parseAndSaveGpxFile(file: MultipartFile, routeName: String, description: String): Map<String, Any> {
-        logger.info(
-            "GPX 파일 파싱 시작: 파일명={}, 크기={} bytes, 경로명={}",
-            file.originalFilename, file.size, routeName
-        )
-
-        val startTime = System.currentTimeMillis()
-
-        // 파일 크기 및 형식 검증
-        if (file.isEmpty) {
-            logger.error("빈 파일 업로드 시도: 파일명={}", file.originalFilename)
-            throw IllegalArgumentException("업로드된 파일이 비어있습니다")
-        }
-
-        if (file.size > 10 * 1024 * 1024) { // 10MB 제한
-            logger.error("파일 크기 초과: 파일명={}, 크기={} bytes", file.originalFilename, file.size)
-            throw IllegalArgumentException("파일 크기가 너무 큽니다 (최대 10MB)")
-        }
-
-        logger.debug("파일 검증 완료: 파일명={}", file.originalFilename)
-
-        // 임시 파일 생성 (GPX 라이브러리가 파일 경로를 필요로 하기 때문)
-        val tempFile = try {
-            java.io.File.createTempFile("gpx", ".gpx")
-        } catch (e: Exception) {
-            logger.error("임시 파일 생성 실패: {}", e.message, e)
-            throw RuntimeException("임시 파일 생성에 실패했습니다: ${e.message}", e)
-        }
-
-        logger.debug("임시 파일 생성 완료: {}", tempFile.absolutePath)
-
-        try {
-            // 업로드된 파일을 임시 파일로 복사
-            file.transferTo(tempFile)
-            logger.debug("파일 복사 완료: {} -> {}", file.originalFilename, tempFile.absolutePath)
-
-            // GPX 파일 파싱
-            val gpx = try {
-                logger.debug("GPX 파일 파싱 시작")
-                GPX.read(tempFile.toPath())
-            } catch (e: Exception) {
-                logger.error("GPX 파일 파싱 실패: 파일명={}, 오류={}", file.originalFilename, e.message, e)
-                throw IllegalArgumentException("GPX 파일 파싱에 실패했습니다. 올바른 GPX 형식인지 확인해주세요: ${e.message}", e)
-            }
-
-            logger.debug("GPX 파일 파싱 완료")
-
-            // 트랙 데이터 검증
-            val tracks = gpx.tracks.toList()
-            if (tracks.isEmpty()) {
-                logger.error("트랙 데이터 없음: 파일명={}", file.originalFilename)
-                throw IllegalArgumentException("GPX 파일에 트랙 데이터가 없습니다")
-            }
-
-            logger.debug("트랙 개수: {}", tracks.size)
-
-            // 첫 번째 트랙 선택 (일반적으로 GPX 파일은 하나의 트랙을 포함)
-            val track = tracks.first()
-            val segments = track.segments.toList()
-            if (segments.isEmpty()) {
-                logger.error("세그먼트 데이터 없음: 파일명={}", file.originalFilename)
-                throw IllegalArgumentException("GPX 파일에 세그먼트 데이터가 없습니다")
-            }
-
-            logger.debug("세그먼트 개수: {}", segments.size)
-
-            // 트랙에서 웨이포인트 추출
-            val waypoints = extractWaypointsFromTrack(track)
-            logger.info("웨이포인트 추출 완료: {}개", waypoints.size)
-
-            // 웨이포인트 최소 개수 검증
-            if (waypoints.size < 2) {
-                logger.error("웨이포인트 개수 부족: {}개 (최소 2개 필요)", waypoints.size)
-                throw IllegalArgumentException("경로를 생성하기 위해서는 최소 2개 이상의 웨이포인트가 필요합니다 (현재: ${waypoints.size}개)")
-            }
-
-            // 경로 통계 계산 (총 거리, 고도 변화 등)
-            logger.debug("경로 통계 계산 시작")
-            val routeStats = calculateRouteStatistics(waypoints)
-            logger.info(
-                "경로 통계 계산 완료: 총거리={:.1f}m, 고도상승={:.1f}m, 고도하강={:.1f}m",
-                routeStats.totalDistance, routeStats.elevationGain, routeStats.elevationLoss
-            )
-
-            // 최소 거리 검증 (너무 짧은 경로 방지)
-            if (routeStats.totalDistance < 10.0) { // 10미터 미만
-                logger.error("경로 거리 부족: {:.1f}m (최소 10m 필요)", routeStats.totalDistance)
-                throw IllegalArgumentException(
-                    "경로가 너무 짧습니다 (최소 10m 이상 필요, 현재: ${
-                        String.format(
-                            "%.1f",
-                            routeStats.totalDistance
-                        )
-                    }m)"
-                )
-            }
-
-            // GPX 경로 엔티티 생성 및 저장
-            // logger.debug("GPX 경로 엔티티 저장 시작")
-            // val gpxRoute = gpxRouteRepository.save(
-            //     GpxRoute(
-            //         name = routeName,
-            //         description = description,
-            //         totalDistance = routeStats.totalDistance,
-            //         totalElevationGain = routeStats.elevationGain,
-            //         totalElevationLoss = routeStats.elevationLoss,
-            //         createdAt = LocalDateTime.now()
-            //     )
-            // )
-            // logger.info("GPX 경로 저장 완료: ID={}, 이름={}", gpxRoute.id, gpxRoute.name)
-
-            // 웨이포인트 데이터 저장
-            // logger.debug("웨이포인트 저장 시작: {}개", waypoints.size)
-            // saveWaypoints(gpxRoute, waypoints)
-            // logger.info("웨이포인트 저장 완료: {}개", waypoints.size)
-
-            // 자동으로 체크포인트 생성 (1km 간격으로 거리 기반)
-            // logger.debug("체크포인트 자동 생성 시작")
-            // generateAutoCheckpoints(gpxRoute, waypoints)
-
-            val processingTime = System.currentTimeMillis() - startTime
-            logger.info(
-                "GPX 파일 파싱 완료: 처리시간={}ms, 경로ID={}, 웨이포인트={}개, 총거리={:.1f}m",
-                processingTime, "N/A", waypoints.size, routeStats.totalDistance
-            )
-
-            return mapOf( // GpxRoute 엔티티가 삭제되어 임시로 Map 반환
-                "name" to routeName,
-                "description" to description,
-                "totalDistance" to routeStats.totalDistance,
-                "totalElevationGain" to routeStats.elevationGain,
-                "totalElevationLoss" to routeStats.elevationLoss,
-                "createdAt" to LocalDateTime.now()
-            )
-        } catch (e: IllegalArgumentException) {
-            // 비즈니스 로직 예외는 그대로 전파
-            logger.warn("GPX 파일 처리 실패 (검증 오류): {}", e.message)
-            throw e
-        } catch (e: Exception) {
-            // 예상하지 못한 예외 처리
-            logger.error("GPX 파일 처리 중 예상치 못한 오류 발생: {}", e.message, e)
-            throw RuntimeException("GPX 파일 처리 중 오류가 발생했습니다: ${e.message}", e)
-        } finally {
-            // 임시 파일 정리 (파일이 존재하고 삭제할 수 있는 경우만)
-            try {
-                if (tempFile.exists()) {
-                    val deleted = tempFile.delete()
-                    if (deleted) {
-                        logger.debug("임시 파일 삭제 완료: {}", tempFile.absolutePath)
-                    } else {
-                        logger.warn("임시 파일 삭제 실패: {}", tempFile.absolutePath)
-                    }
-                }
-            } catch (e: Exception) {
-                // 임시 파일 삭제 실패는 로그만 남기고 무시
-                logger.warn("임시 파일 삭제 중 오류 발생: {}", e.message)
-            }
-        }
-    }
-
-    /**
      * GPX 트랙에서 모든 웨이포인트를 추출하고 100미터 간격으로 보간 포인트 추가
      *
      * GPX 트랙은 여러 세그먼트로 구성될 수 있으며,
@@ -1015,212 +654,6 @@ class GpxService(
     }
 
     /**
-     * 웨이포인트 데이터를 데이터베이스에 저장
-     *
-     * 현재는 GpxRoute와 GpxWaypoint 엔티티가 삭제되어 비활성화됨
-     *
-     * @param gpxRoute 저장된 GPX 경로 엔티티 (현재 사용 안함)
-     * @param waypoints 웨이포인트 리스트
-     */
-    private fun saveWaypoints(gpxRoute: Any?, waypoints: List<WayPoint>) {
-        // 웨이포인트 저장 기능 비활성화 (GpxWaypoint 엔티티 삭제됨)
-        logger.debug("웨이포인트 저장 기능 비활성화됨: {}개", waypoints.size)
-
-        // var cumulativeDistance = 0.0
-        //
-        // waypoints.forEachIndexed { index, waypoint ->
-        //     // 첫 번째 웨이포인트가 아닌 경우 누적 거리 계산
-        //     if (index > 0) {
-        //         val prevWaypoint = waypoints[index - 1]
-        //         val distance = GeoUtils.calculateDistance(
-        //             prevWaypoint.latitude.toDegrees(),
-        //             prevWaypoint.longitude.toDegrees(),
-        //             waypoint.latitude.toDegrees(),
-        //             waypoint.longitude.toDegrees()
-        //         )
-        //         cumulativeDistance += distance
-        //     }
-        //
-        //     // 고도 데이터 처리: 음수이거나 없는 경우 0.0으로 처리
-        //     val elevation = waypoint.elevation.map { it.toDouble() }.orElse(0.0)
-        //     val validElevation = if (elevation < 0) 0.0 else elevation
-        //
-        //     // GpxWaypoint 엔티티 생성 및 저장
-        //     val gpxWaypoint = GpxWaypoint(
-        //         latitude = waypoint.latitude.toDegrees(),
-        //         longitude = waypoint.longitude.toDegrees(),
-        //         elevation = validElevation, // 유효한 고도 데이터만 저장
-        //         sequence = index, // 웨이포인트 순서
-        //         distanceFromStart = cumulativeDistance, // 시작점으로부터의 누적 거리
-        //         gpxRoute = gpxRoute
-        //     )
-        //
-        //     gpxWaypointRepository.save(gpxWaypoint)
-        // }
-    }
-
-    /**
-     * 자동 체크포인트 생성
-     *
-     * 현재는 GpxRoute 엔티티가 삭제되어 비활성화됨
-     *
-     * @param gpxRoute 저장된 GPX 경로 엔티티 (현재 사용 안함)
-     * @param waypoints 웨이포인트 리스트
-     */
-    private fun generateAutoCheckpoints(gpxRoute: Any?, waypoints: List<WayPoint>) {
-        // 체크포인트 자동 생성 기능 비활성화 (GpxRoute 엔티티 삭제됨)
-        logger.debug("체크포인트 자동 생성 기능 비활성화됨: 웨이포인트={}개", waypoints.size)
-
-        // 체크포인트 자동 생성 기능 비활성화 (GpxRoute 엔티티 삭제됨)
-        logger.info("체크포인트 자동 생성 기능 비활성화됨")
-
-        // val checkpointInterval = 1000.0 // 체크포인트 간격: 1km
-        // var nextCheckpointDistance = checkpointInterval // 다음 체크포인트까지의 목표 거리
-        // var cumulativeDistance = 0.0 // 누적 거리
-        // var checkpointSequence = 1 // 체크포인트 순서 번호
-        // var generatedCheckpoints = 0
-        //
-        // // 시작점 체크포인트 생성
-        // val startWaypoint = waypoints.first()
-        // val startCheckpoint = checkpointRepository.save(
-        //     Checkpoint(
-        //         name = "시작점",
-        //         latitude = startWaypoint.latitude.toDegrees(),
-        //         longitude = startWaypoint.longitude.toDegrees(),
-        //         radius = 50.0, // 체크포인트 인식 반경: 50m
-        //         sequence = 0,
-        //         description = "경로 시작점",
-        //         gpxRoute = gpxRoute
-        //     )
-        // )
-        // generatedCheckpoints++
-        // logger.debug("시작점 체크포인트 생성: ID={}, 좌표=({:.6f}, {:.6f})",
-        //     startCheckpoint.id, startCheckpoint.latitude, startCheckpoint.longitude)
-        //
-        // // 중간 체크포인트들 생성 (1km 간격)
-        // for (i in 1 until waypoints.size) {
-        //     val prevWaypoint = waypoints[i - 1]
-        //     val currWaypoint = waypoints[i]
-        //
-        //     // 현재 세그먼트의 거리 계산
-        //     val segmentDistance = GeoUtils.calculateDistance(
-        //         prevWaypoint.latitude.toDegrees(),
-        //         prevWaypoint.longitude.toDegrees(),
-        //         currWaypoint.latitude.toDegrees(),
-        //         currWaypoint.longitude.toDegrees()
-        //     )
-        //
-        //     cumulativeDistance += segmentDistance
-        //
-        //     // 누적 거리가 다음 체크포인트 거리에 도달한 경우
-        //     if (cumulativeDistance >= nextCheckpointDistance) {
-        //         val checkpoint = checkpointRepository.save(
-        //             Checkpoint(
-        //                 name = "체크포인트 $checkpointSequence",
-        //                 latitude = currWaypoint.latitude.toDegrees(),
-        //                 longitude = currWaypoint.longitude.toDegrees(),
-        //                 radius = 50.0,
-        //                 sequence = checkpointSequence,
-        //                 description = "${kotlin.math.round(cumulativeDistance)}m 지점",
-        //                 gpxRoute = gpxRoute
-        //             )
-        //         )
-        //         generatedCheckpoints++
-        //         logger.debug("중간 체크포인트 생성: ID={}, 순서={}, 거리={:.0f}m, 좌표=({:.6f}, {:.6f})",
-        //             checkpoint.id, checkpointSequence, cumulativeDistance,
-        //             checkpoint.latitude, checkpoint.longitude)
-        //
-        //         // 다음 체크포인트 목표 거리 설정
-        //         nextCheckpointDistance += checkpointInterval
-        //         checkpointSequence++
-        //     }
-        // }
-        //
-        // // 종료점 체크포인트 생성
-        // val endWaypoint = waypoints.last()
-        // val endCheckpoint = checkpointRepository.save(
-        //     Checkpoint(
-        //         name = "종료점",
-        //         latitude = endWaypoint.latitude.toDegrees(),
-        //         longitude = endWaypoint.longitude.toDegrees(),
-        //         radius = 50.0,
-        //         sequence = checkpointSequence,
-        //         description = "경로 종료점",
-        //         gpxRoute = gpxRoute
-        //     )
-        // )
-        // generatedCheckpoints++
-        // logger.debug("종료점 체크포인트 생성: ID={}, 좌표=({:.6f}, {:.6f})",
-        //     endCheckpoint.id, endCheckpoint.latitude, endCheckpoint.longitude)
-        //
-        // logger.info("체크포인트 자동 생성 완료: 경로ID={}, 총 {}개 생성 (시작점 + 중간점 {}개 + 종료점)",
-        //     gpxRoute.id, generatedCheckpoints, generatedCheckpoints - 2)
-    }
-
-    /**
-     * 모든 GPX 경로 조회
-     *
-     * 현재는 GpxRoute 엔티티가 삭제되어 비활성화됨
-     *
-     * @return GPX 경로 리스트 (현재는 빈 리스트)
-     */
-    fun getAllRoutes(): List<Any> {
-        logger.debug("모든 GPX 경로 조회 기능 비활성화됨")
-        // val routes = gpxRouteRepository.findAllOrderByCreatedAtDesc()
-        // logger.info("GPX 경로 조회 완료: {}개 경로", routes.size)
-        return emptyList()
-    }
-
-    /**
-     * GPX 경로 상세 조회
-     *
-     * 현재는 GpxRoute 엔티티가 삭제되어 비활성화됨
-     *
-     * @param routeId 경로 ID
-     * @return GPX 경로 엔티티 (현재는 null)
-     */
-    fun getRouteById(routeId: Long): Any? {
-        logger.debug("GPX 경로 상세 조회 기능 비활성화됨: ID={}", routeId)
-        // val route = gpxRouteRepository.findById(routeId).orElse(null)
-        // if (route != null) {
-        //     logger.debug("GPX 경로 조회 성공: ID={}, 이름={}", route.id, route.name)
-        // } else {
-        //     logger.warn("GPX 경로 조회 실패: ID={}가 존재하지 않음", routeId)
-        // }
-        return null
-    }
-
-    /**
-     * 경로의 웨이포인트 조회
-     *
-     * 현재는 GpxWaypoint 엔티티가 삭제되어 비활성화됨
-     *
-     * @param routeId 경로 ID
-     * @return 웨이포인트 리스트 (현재는 빈 리스트)
-     */
-    fun getRouteWaypoints(routeId: Long): List<Any> {
-        logger.debug("경로 웨이포인트 조회 기능 비활성화됨: 경로ID={}", routeId)
-        // val waypoints = gpxWaypointRepository.findByGpxRouteIdOrderBySequenceAsc(routeId)
-        // logger.debug("웨이포인트 조회 완료: 경로ID={}, {}개", routeId, waypoints.size)
-        return emptyList()
-    }
-
-    /**
-     * 경로의 체크포인트 조회
-     *
-     * 특정 경로에 속한 모든 체크포인트를 순서대로 조회합니다.
-     *
-     * @param routeId 경로 ID
-     * @return 체크포인트 리스트 (순서별 정렬)
-     */
-    fun getRouteCheckpoints(routeId: Long): List<Checkpoint> {
-        logger.debug("경로 체크포인트 조회 기능 비활성화됨: 경로ID={}", routeId)
-        // val checkpoints = checkpointRepository.findByCourse_CourseIdOrderByCpIndexAsc(routeId)
-        // logger.debug("체크포인트 조회 완료: 경로ID={}, {}개", routeId, checkpoints.size)
-        return emptyList()
-    }
-
-    /**
      * ================================ 실시간 GPS 위치 보정 핵심 메서드 ================================
      * 
      * 이 메서드는 전체 시스템의 핵심 비즈니스 로직으로, 다음과 같은 단계로 GPS 위치를 보정합니다:
@@ -1252,12 +685,7 @@ class GpxService(
      * - 체크포인트 통과 기록 저장
      * - 이전 위치 정보 업데이트 (다음 요청 시 사용)
      * - 리더보드 Sorted Set 업데이트
-     * 
-     * **STEP 6: 보정 품질 평가**
-     * - GPS 신뢰도 계산 (정확도 및 속도 기반)
-     * - 칼만 필터 불확실성 측정
-     * - 보정 강도 계산 (원본 vs 보정 위치 차이)
-     * - 종합 품질 등급 결정 (EXCELLENT/GOOD/FAIR/POOR)
+     *
      * 
      * @param request GPS 위치 보정 요청 (userId, eventId, eventDetailId, gpsData 포함)
      * @return 보정된 위치, 체크포인트 통과 정보, 매칭 품질 정보 포함한 응답
@@ -1269,17 +697,22 @@ class GpxService(
      */
     @Transactional(readOnly = true)
     fun correctLocation(request: CorrectLocationRequestDto): CorrectLocationResponseDto {
-        logger.info("위치 보정 요청: userId=${request.userId}, eventDetailId=${request.eventDetailId}, GPS 포인트 수=${request.gpsData.size}")
+        logger.info("위치 보정 요청: userId=${request.userId}, eventDetailId=${request.eventDetailId}, GPS 데이터 수신")
 
         try {
             val userId = request.userId
+            val eventId = request.eventId
             val eventDetailId = request.eventDetailId
             val gpsDataList = request.gpsData
 
-            // GPS 데이터 리스트 유효성 검증
+            // GPS 데이터 리스트 검증
             if (gpsDataList.isEmpty()) {
-                throw IllegalArgumentException("GPS 데이터가 비어있습니다")
+                throw IllegalArgumentException("GPS 데이터가 비어있습니다.")
             }
+
+            // 마지막 GPS 데이터를 사용 (가장 최신 데이터)
+            val lastGpsData = gpsDataList.last()
+            logger.info("GPS 데이터 처리: 총 ${gpsDataList.size}개 중 마지막 데이터 사용")
 
             // Redis에서 코스 데이터 조회 (없으면 자동 로드)
             val courseData = realtimeLocationService.courseDataService.getCourseDataByEventId(eventDetailId)
@@ -1287,31 +720,29 @@ class GpxService(
             // 3차원 칼만 필터 초기화
             val kalman = KalmanFilter()
 
-            // 가장 최신(마지막) GPS 포인트로 최종 결과 계산
-            val lastGpsData = gpsDataList.last()
+            // GPS 포인트들을 순차적으로 칼만 필터에 적용 (정확도 향상을 위해)
+            gpsDataList.forEach { gpsData ->
+                if (gpsData.accuracy != null && gpsData.accuracy > 0) {
+                    val confidence = calculateGpsConfidence(gpsData.accuracy, gpsData.speed)
+                    kalman.filterWithWeights(gpsData.lat, gpsData.lng, gpsData.altitude, gpsData.accuracy, confidence)
+                } else {
+                    kalman.filter(gpsData.lat, gpsData.lng, gpsData.altitude)
+                }
+            }
             var finalCorrectedLat = 0.0
             var finalCorrectedLng = 0.0
             var finalCorrectedAlt: Double? = null
 
-            // 각 GPS 포인트에 대해 순차 처리 (칼만 필터 상태 업데이트용)
-            gpsDataList.forEachIndexed { index, gpsData ->
-                val lat = gpsData.lat
-                val lng = gpsData.lng
-                val alt = gpsData.altitude
-                val accuracy = gpsData.accuracy
-                val timestamp = gpsData.timestamp
+            // 마지막 GPS 포인트 처리 (맵 매칭용)
+            run {
+                val lat = lastGpsData.lat
+                val lng = lastGpsData.lng
+                val alt = lastGpsData.altitude
+                val accuracy = lastGpsData.accuracy
+                val timestamp = lastGpsData.timestamp
 
-                logger.debug("GPS 포인트 $index 처리: 원본위치=($lat, $lng, $alt)")
-
-                // 가중치 기반 3차원 칼만 필터를 사용한 GPS 노이즈 제거
-                val filtered = if (accuracy != null && accuracy > 0) {
-                    // 정확도 정보가 있는 경우 가중치 기반 필터링
-                    val confidence = calculateGpsConfidence(accuracy, gpsData.speed)
-                    kalman.filterWithWeights(lat, lng, alt, accuracy, confidence)
-                } else {
-                    // 정확도 정보가 없는 경우 기본 3차원 필터링
-                    kalman.filter(lat, lng, alt)
-                }
+                // 칼만 필터에서 최종 보정된 위치 가져오기
+                val filtered = kalman.getCurrentPosition3D() ?: Triple(lat, lng, alt)
 
                 logger.debug(
                     "3차원 칼만 필터 적용: 원본=($lat, $lng, $alt) -> " +
@@ -1321,19 +752,18 @@ class GpxService(
                     "GPS 정확도: ${accuracy}m, 신뢰도: ${
                         if (accuracy != null) calculateGpsConfidence(
                             accuracy,
-                            gpsData.speed
+                            lastGpsData.speed
                         ) else "기본값"
                     }"
                 )
 
-                // 마지막 포인트에 대해서만 경로 매칭 수행
-                if (index == gpsDataList.size - 1) {
+                // 경로 매칭 수행
                     val matchResult = if (courseData == null) {
                         // 코스 데이터가 없으면 기본 GPS 위치 사용 (GpxRoute 엔티티 삭제됨)
                         logger.warn("코스 데이터가 Redis에 없음. 기본 GPS 위치 사용: eventDetailId=$eventDetailId")
 
                         // 기본 매칭 결과 생성
-                        com.sponovation.runtrack.algorithm.MatchResult(
+                        MatchResult(
                             matched = false,
                             distanceToRoute = Double.MAX_VALUE,
                             matchedLatitude = filtered.first,
@@ -1348,7 +778,7 @@ class GpxService(
                         val result = matcher.matchToInterpolatedRoute(
                             gpsLat = filtered.first,
                             gpsLon = filtered.second,
-                            bearing = gpsData.bearing?.toDouble() ?: 0.0,
+                            bearing = lastGpsData.heading?.toDouble() ?: 0.0,
                             interpolatedPoints = courseData.interpolatedPoints
                         )
 
@@ -1385,39 +815,37 @@ class GpxService(
                     try {
                         realtimeLocationService.saveParticipantLocation(
                             userId = userId,
+                            eventId = eventId,
                             eventDetailId = eventDetailId,
-                            originalLat = lat,
-                            originalLng = lng,
-                            correctedLat = finalCorrectedLat,
-                            correctedLng = finalCorrectedLng,
+                            latitude = finalCorrectedLat,
+                            longitude = finalCorrectedLng,
+                            altitude = finalCorrectedAlt,
+                            speed = lastGpsData.speed,
                             timestamp = timestamp
                         )
                     } catch (e: Exception) {
                         logger.warn("실시간 위치 저장 실패 (계속 진행): userId=$userId", e)
                     }
-                }
             }
 
             logger.info(
-                "위치 보정 완료: ${gpsDataList.size}개 포인트 처리, " +
+                "위치 보정 완료: 1개 포인트 처리, " +
                         "최종 보정위치=(${"%.6f".format(finalCorrectedLat)}, ${"%.6f".format(finalCorrectedLng)}, " +
                         "${finalCorrectedAlt?.let { "%.2f".format(it) } ?: "null"}m)")
 
-            // 마지막 매칭 결과에서 상세 정보 추출
+            // 매칭 결과에서 상세 정보 추출
             val kalmanForFinal = KalmanFilter()
-            gpsDataList.forEach { gpsData ->
-                if (gpsData.accuracy != null && gpsData.accuracy > 0) {
-                    val confidence = calculateGpsConfidence(gpsData.accuracy, gpsData.speed)
-                    kalmanForFinal.filterWithWeights(
-                        gpsData.lat,
-                        gpsData.lng,
-                        gpsData.altitude,
-                        gpsData.accuracy,
-                        confidence
-                    )
-                } else {
-                    kalmanForFinal.filter(gpsData.lat, gpsData.lng, gpsData.altitude)
-                }
+            if (lastGpsData.accuracy != null && lastGpsData.accuracy > 0) {
+                val confidence = calculateGpsConfidence(lastGpsData.accuracy, lastGpsData.speed)
+                kalmanForFinal.filterWithWeights(
+                    lastGpsData.lat,
+                    lastGpsData.lng,
+                    lastGpsData.altitude,
+                    lastGpsData.accuracy,
+                    confidence
+                )
+            } else {
+                kalmanForFinal.filter(lastGpsData.lat, lastGpsData.lng, lastGpsData.altitude)
             }
             val filtered3D = kalmanForFinal.getCurrentPosition3D()
             val filtered = if (filtered3D != null) Pair(filtered3D.first, filtered3D.second) else Pair(
@@ -1430,7 +858,7 @@ class GpxService(
                 matcher.matchToInterpolatedRoute(
                     gpsLat = filtered.first,
                     gpsLon = filtered.second,
-                    bearing = lastGpsData.bearing?.toDouble() ?: 0.0,
+                    bearing = lastGpsData.heading?.toDouble() ?: 0.0,
                     interpolatedPoints = courseData.interpolatedPoints
                 )
             } else {
@@ -1515,71 +943,14 @@ class GpxService(
             }
 
             return CorrectLocationResponseDto(
-                data = CorrectedLocationDataDto(
-                    correctedLat = finalCorrectedLat,
-                    correctedLng = finalCorrectedLng,
-                    correctedAltitude = finalCorrectedAlt
-                ),
-                checkpointReaches = checkpointReaches.takeIf { it.isNotEmpty() },
-                nearestGpxPoint = finalMatchResult?.nearestGpxPoint?.let { nearest ->
-                    com.sponovation.runtrack.dto.NearestGpxPointDto(
-                        latitude = nearest.latitude,
-                        longitude = nearest.longitude,
-                        elevation = nearest.elevation,
-                        distanceToPoint = nearest.distanceToPoint,
-                        distanceFromStart = nearest.distanceFromStart,
-                        routeProgress = finalMatchResult.routeProgress,
-                        routeBearing = nearest.routeBearing
-                    )
-                },
-                matchingQuality = finalMatchResult?.let { result ->
-                    // 최종 GPS 신뢰도 계산
-                    val finalGpsConfidence = if (lastGpsData.accuracy != null && lastGpsData.accuracy > 0) {
-                        calculateGpsConfidence(lastGpsData.accuracy, lastGpsData.speed)
-                    } else null
-
-                    // 칼만 필터 불확실성 계산
-                    val uncertainty = kalmanForFinal.getUncertainty3D()
-                    val uncertaintyDto = com.sponovation.runtrack.dto.CorrectionUncertaintyDto(
-                        latitudeUncertainty = uncertainty.first,
-                        longitudeUncertainty = uncertainty.second,
-                        altitudeUncertainty = uncertainty.third
-                    )
-
-                    // 보정 강도 계산 (원본과 보정된 위치의 차이 기반)
-                    val correctionDistance = com.sponovation.runtrack.util.GeoUtils.calculateDistance(
-                        lastGpsData.lat, lastGpsData.lng,
-                        finalCorrectedLat, finalCorrectedLng
-                    )
-                    val correctionStrength = when {
-                        correctionDistance < 1.0 -> 0.1    // 거의 보정하지 않음
-                        correctionDistance < 5.0 -> 0.3    // 약간 보정
-                        correctionDistance < 15.0 -> 0.6   // 보통 보정
-                        correctionDistance < 50.0 -> 0.8   // 많이 보정
-                        else -> 1.0                        // 매우 많이 보정
-                    }
-
-                    // 품질 등급 결정
-                    val qualityGrade = calculateQualityGrade(
-                        result.matched,
-                        result.matchScore,
-                        finalGpsConfidence ?: 0.5,
-                        correctionStrength
-                    )
-
-                    com.sponovation.runtrack.dto.MatchingQualityDto(
-                        isMatched = result.matched,
-                        matchScore = result.matchScore,
-                        currentBearing = result.currentBearing,
-                        routeBearing = result.routeBearing,
-                        bearingDifference = result.bearingDifference,
-                        segmentIndex = result.segmentIndex,
-                        gpsConfidence = finalGpsConfidence,
-                        kalmanUncertainty = uncertaintyDto,
-                        correctionStrength = correctionStrength,
-                        qualityGrade = qualityGrade
-                    )
-                }
+                userId = userId,
+                eventId = eventId,
+                eventDetailId = eventDetailId,
+                latitude = finalCorrectedLat,
+                longitude = finalCorrectedLng,
+                altitude = finalCorrectedAlt,
+                speed = lastGpsData.speed,
+                timestamp = lastGpsData.timestamp
             )
 
         } catch (e: NoSuchElementException) {
@@ -1632,62 +1003,6 @@ class GpxService(
     }
 
     /**
-     * 위치 보정 품질 등급을 계산합니다.
-     *
-     * @param isMatched 경로 매칭 성공 여부
-     * @param matchScore 매칭 점수
-     * @param gpsConfidence GPS 신뢰도
-     * @param correctionStrength 보정 강도
-     * @return 품질 등급 ("EXCELLENT", "GOOD", "FAIR", "POOR")
-     */
-    private fun calculateQualityGrade(
-        isMatched: Boolean,
-        matchScore: Double,
-        gpsConfidence: Double,
-        correctionStrength: Double
-    ): String {
-
-        // 기본 점수 계산 (0 ~ 100)
-        var score = 0.0
-
-        // 경로 매칭 성공 여부 (40점)
-        score += if (isMatched) 40.0 else 0.0
-
-        // 매칭 점수 (30점) - 낮을수록 좋음
-        val matchScorePoints = when {
-            matchScore <= 0.1 -> 30.0
-            matchScore <= 0.3 -> 25.0
-            matchScore <= 0.5 -> 20.0
-            matchScore <= 0.7 -> 15.0
-            matchScore <= 1.0 -> 10.0
-            else -> 0.0
-        }
-        score += matchScorePoints
-
-        // GPS 신뢰도 (20점)
-        val confidencePoints = gpsConfidence * 20.0
-        score += confidencePoints
-
-        // 보정 강도 (10점) - 적당한 보정이 좋음
-        val correctionPoints = when {
-            correctionStrength <= 0.2 -> 10.0  // 거의 보정하지 않음 (좋음)
-            correctionStrength <= 0.4 -> 8.0   // 약간 보정 (좋음)
-            correctionStrength <= 0.6 -> 6.0   // 보통 보정 (보통)
-            correctionStrength <= 0.8 -> 4.0   // 많이 보정 (나쁨)
-            else -> 2.0                         // 매우 많이 보정 (매우 나쁨)
-        }
-        score += correctionPoints
-
-        // 등급 결정
-        return when {
-            score >= 85.0 -> "EXCELLENT"  // 우수
-            score >= 70.0 -> "GOOD"       // 좋음
-            score >= 50.0 -> "FAIR"       // 보통
-            else -> "POOR"                // 나쁨
-        }
-    }
-
-    /**
      * ================================ GPS 위치 및 추가 정보 Redis 저장 ================================
      * 
      * **저장되는 GPS 데이터:**
@@ -1736,7 +1051,7 @@ class GpxService(
         distanceFromStart: Double?
     ) {
         try {
-            val redisKey = "location:$userId:$eventDetailId"
+            val redisKey = "gps:$eventId:$eventDetailId:$userId"
 
             // 기존 데이터 조회 (누적 계산용)
             val existingData = getCorrectedLocationFromRedis(userId, eventId, eventDetailId)
@@ -1781,7 +1096,7 @@ class GpxService(
                 correctedLongitude = correctedLng,
                 correctedAltitude = correctedAlt,
                 lastUpdated = Instant.now().epochSecond,
-                heading = rawGpsData.bearing,
+                heading = rawGpsData.heading,
                 distanceCovered = distanceCovered,
                 cumulativeTime = cumulativeTime
             )
@@ -1795,24 +1110,18 @@ class GpxService(
             hashOps.put(redisKey, "eventDetailId", locationData.eventDetailId.toString())
             
             // 원본 GPS 데이터 (센서에서 직접 수신한 값들)
-            hashOps.put(redisKey, "rawLatitude", locationData.rawLatitude.toString())
-            hashOps.put(redisKey, "rawLongitude", locationData.rawLongitude.toString())
-            hashOps.put(redisKey, "rawAltitude", locationData.rawAltitude?.toString() ?: "null")
-            hashOps.put(redisKey, "rawAccuracy", locationData.rawAccuracy?.toString() ?: "null")
-            hashOps.put(redisKey, "rawSpeed", locationData.rawSpeed?.toString() ?: "null")
-            hashOps.put(redisKey, "rawTime", locationData.rawTime.toString())
+            hashOps.put(redisKey, "latitude", locationData.rawLatitude.toString())
+            hashOps.put(redisKey, "longitude", locationData.rawLongitude.toString())
+            hashOps.put(redisKey, "speed", locationData.rawSpeed?.toString() ?: "null")
             hashOps.put(redisKey, "heading", locationData.heading?.toString() ?: "null")
             
             // 보정된 GPS 데이터 (칼만 필터 + 맵 매칭 적용)
-            hashOps.put(redisKey, "correctedLatitude", locationData.correctedLatitude.toString())
-            hashOps.put(redisKey, "correctedLongitude", locationData.correctedLongitude.toString())
-            hashOps.put(redisKey, "correctedAltitude", locationData.correctedAltitude?.toString() ?: "null")
+            hashOps.put(redisKey, "latitude", locationData.correctedLatitude.toString())
+            hashOps.put(redisKey, "longitude", locationData.correctedLongitude.toString())
+            hashOps.put(redisKey, "altitude", locationData.correctedAltitude?.toString() ?: "null")
             
             // 계산된 메타 정보
-            hashOps.put(redisKey, "distanceCovered", locationData.distanceCovered.toString())
-            hashOps.put(redisKey, "cumulativeTime", locationData.cumulativeTime.toString())
-            hashOps.put(redisKey, "distanceFromStart", distanceFromStart?.toString() ?: "null")
-            hashOps.put(redisKey, "lastUpdated", locationData.lastUpdated.toString())
+            hashOps.put(redisKey, "created", locationData.lastUpdated.toString())
 
             // TTL 설정 (24시간)
             redisTemplate.expire(redisKey, 24, java.util.concurrent.TimeUnit.HOURS)
@@ -1825,7 +1134,7 @@ class GpxService(
                         "고도=${rawGpsData.altitude?.let { String.format("%.2f", it) } ?: "null"}m, " +
                         "속도=${rawGpsData.speed?.let { String.format("%.2f", it) } ?: "null"}km/h, " +
                         "정확도=${rawGpsData.accuracy?.let { String.format("%.1f", it) } ?: "null"}m, " +
-                        "방향=${rawGpsData.bearing?.let { String.format("%.0f", it) } ?: "null"}°"
+                        "방향=${rawGpsData.heading?.let { String.format("%.0f", it) } ?: "null"}°"
             )
             logger.info(
                 "- 보정 결과: 위치=(${String.format("%.6f", correctedLat)}, ${String.format("%.6f", correctedLng)}), " +

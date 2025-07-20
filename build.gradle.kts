@@ -30,9 +30,6 @@ dependencies {
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.7.0")
     implementation("com.querydsl:querydsl-jpa:5.0.0:jakarta")
 
-    // GPX 파싱을 위한 의존성
-    implementation("io.jenetics:jpx:3.1.0")
-
     // HTTP 클라이언트 (맵 매칭 API용)
     implementation("org.springframework.boot:spring-boot-starter-webflux")
 

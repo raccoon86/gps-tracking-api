@@ -1,6 +1,5 @@
 package com.sponovation.runtrack.service
 
-import com.sponovation.runtrack.domain.Gender
 import com.sponovation.runtrack.domain.Participant
 import com.sponovation.runtrack.dto.*
 import com.sponovation.runtrack.repository.EventRepository
@@ -57,8 +56,8 @@ class ParticipantService(
             nickname = request.nickname,
             country = request.country,
             profileImageUrl = request.profileImageUrl,
-            age = request.age,
             gender = request.gender,
+            birthday = request.birthday,
             status = request.status,
             registeredAt = LocalDateTime.now(),
             bibNumber = request.bibNumber,
@@ -94,8 +93,8 @@ class ParticipantService(
             nickname = request.nickname ?: participant.nickname,
             country = request.country ?: participant.country,
             profileImageUrl = request.profileImageUrl ?: participant.profileImageUrl,
-            age = request.age ?: participant.age,
             gender = request.gender ?: participant.gender,
+            birthday = request.birthday ?: participant.birthday,
             status = request.status ?: participant.status,
             bibNumber = request.bibNumber ?: participant.bibNumber,
             tagName = request.tagName ?: participant.tagName,
@@ -179,8 +178,8 @@ class ParticipantService(
                 nickname = testNicknames[Random.nextInt(testNicknames.size)] + index,
                 country = testCountries[Random.nextInt(testCountries.size)],
                 profileImageUrl = "https://example.com/profile$index.jpg",
-                age = Random.nextInt(18, 70),
-                gender = if (Random.nextBoolean()) Gender.M else Gender.F,
+                gender = if (Random.nextBoolean()) "M" else "F",
+                birthday = LocalDateTime.now().minusYears(Random.nextLong(18, 70)),
                 status = "REGISTERED",
                 registeredAt = LocalDateTime.now().minusDays(Random.nextLong(0, 30)),
                 bibNumber = "T${String.format("%04d", index)}",
@@ -205,8 +204,8 @@ class ParticipantService(
             nickname = participant.nickname,
             country = participant.country,
             profileImageUrl = participant.profileImageUrl,
-            age = participant.age,
             gender = participant.gender,
+            birthday = participant.birthday,
             status = participant.status,
             registeredAt = participant.registeredAt,
             bibNumber = participant.bibNumber,
@@ -270,7 +269,7 @@ class ParticipantService(
         // 응답 DTO 변환
         val searchItems = filteredParticipants.map { participant ->
             ParticipantSearchItemDto(
-                participantId = participant.id,
+                participantId = participant.userId,
                 name = participant.name,
                 nickname = participant.nickname,
                 bibNumber = participant.bibNumber,

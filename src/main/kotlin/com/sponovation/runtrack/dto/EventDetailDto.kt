@@ -64,7 +64,13 @@ data class EventDetailResponseDto(
     @Schema(description = "코스 카테고리 목록")
     @JsonProperty("courseCategory")
     val courseCategory: List<CourseCategoryDto>,
+)
 
+/**
+ * 대회 현장 상세 조회 응답 DTO
+ */
+@Schema(description = "대회 상세 조회 응답")
+data class EventVenueDetailResponseDto(
     @Schema(description = "참가자 위치 데이터 (1~3위 유저 + 트래커 목록 유저)")
     @JsonProperty("participantsLocations")
     val participantsLocations: List<EventParticipantLocationDto>,
@@ -133,10 +139,6 @@ data class EventParticipantLocationDto(
     @Schema(description = "속도 (m/s)", example = "2.8367636")
     @JsonProperty("speed")
     val speed: Float? = null,
-
-    @Schema(description = "누적 이동 거리 (미터)", example = "1200.5")
-    @JsonProperty("distanceCovered")
-    val distanceCovered: Double? = null,
 )
 
 /**

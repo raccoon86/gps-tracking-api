@@ -92,7 +92,6 @@ class CheckpointTimesService(
         return try {
             val locationJson = redisTemplate.opsForValue().get(key) as? String
             if (locationJson != null) {
-                // 간단한 JSON 파싱 (Jackson 사용하지 않고 수동으로)
                 val latitude = locationJson.substringAfter("\"latitude\":").substringBefore(",").toDouble()
                 val longitude = locationJson.substringAfter("\"longitude\":").substringBefore(",").toDouble()
                 val altitudeStr = locationJson.substringAfter("\"altitude\":").substringBefore(",")
@@ -147,52 +146,6 @@ class CheckpointTimesService(
                 "userId=$userId, eventId=$eventId, eventDetailId=$eventDetailId, " +
                 "checkpointId=$checkpointId", e)
             throw e
-        }
-    }
-    
-    /**
-     * 현재 시간으로 체크포인트 통과 시간 기록
-     * 
-     * @param userId 사용자 ID
-     * @param eventId 이벤트 ID
-     * @param eventDetailId 이벤트 상세 ID
-     * @param checkpointId 체크포인트 ID
-     */
-    fun recordCheckpointPassTimeNow(
-        userId: String,
-        eventId: String,
-        eventDetailId: String,
-        checkpointId: String
-    ) {
-        val currentTimeSeconds = Instant.now().epochSecond
-        recordCheckpointPassTime(userId, eventId, eventDetailId, checkpointId, currentTimeSeconds)
-    }
-    
-    /**
-     * 특정 체크포인트 통과 시간 조회
-     * 
-     * @param userId 사용자 ID
-     * @param eventId 이벤트 ID
-     * @param eventDetailId 이벤트 상세 ID
-     * @param checkpointId 체크포인트 ID
-     * @return 통과 시간 (Unix Timestamp) 또는 null
-     */
-    fun getCheckpointPassTime(
-        userId: String,
-        eventId: String,
-        eventDetailId: String,
-        checkpointId: String
-    ): Long? {
-        val key = generateCheckpointTimesKey(userId, eventId, eventDetailId)
-        
-        return try {
-            val passTimeStr = redisTemplate.opsForHash<String, String>().get(key, checkpointId)
-            passTimeStr?.toLongOrNull()
-        } catch (e: Exception) {
-            logger.error("체크포인트 통과 시간 조회 실패: " +
-                "userId=$userId, eventId=$eventId, eventDetailId=$eventDetailId, " +
-                "checkpointId=$checkpointId", e)
-            null
         }
     }
     
@@ -253,109 +206,6 @@ class CheckpointTimesService(
                 "checkpointId=$checkpointId", e)
             false
         }
-    }
-    
-    /**
-     * 참가자의 체크포인트 통과 데이터 삭제
-     * 
-     * @param userId 사용자 ID
-     * @param eventId 이벤트 ID
-     * @param eventDetailId 이벤트 상세 ID
-     */
-    fun deleteCheckpointTimes(
-        userId: String,
-        eventId: String,
-        eventDetailId: String
-    ) {
-        val key = generateCheckpointTimesKey(userId, eventId, eventDetailId)
-        
-        try {
-            redisTemplate.delete(key)
-            logger.info("체크포인트 통과 데이터 삭제 성공: " +
-                "userId=$userId, eventId=$eventId, eventDetailId=$eventDetailId")
-        } catch (e: Exception) {
-            logger.error("체크포인트 통과 데이터 삭제 실패: " +
-                "userId=$userId, eventId=$eventId, eventDetailId=$eventDetailId", e)
-            throw e
-        }
-    }
-    
-    /**
-     * 특정 체크포인트 통과 시간 삭제
-     * 
-     * @param userId 사용자 ID
-     * @param eventId 이벤트 ID
-     * @param eventDetailId 이벤트 상세 ID
-     * @param checkpointId 체크포인트 ID
-     */
-    fun deleteCheckpointPassTime(
-        userId: String,
-        eventId: String,
-        eventDetailId: String,
-        checkpointId: String
-    ) {
-        val key = generateCheckpointTimesKey(userId, eventId, eventDetailId)
-        
-        try {
-            redisTemplate.opsForHash<String, String>().delete(key, checkpointId)
-            logger.info("체크포인트 통과 시간 삭제 성공: " +
-                "userId=$userId, eventId=$eventId, eventDetailId=$eventDetailId, " +
-                "checkpointId=$checkpointId")
-        } catch (e: Exception) {
-            logger.error("체크포인트 통과 시간 삭제 실패: " +
-                "userId=$userId, eventId=$eventId, eventDetailId=$eventDetailId, " +
-                "checkpointId=$checkpointId", e)
-            throw e
-        }
-    }
-    
-    /**
-     * 통과한 체크포인트 개수 조회
-     * 
-     * @param userId 사용자 ID
-     * @param eventId 이벤트 ID
-     * @param eventDetailId 이벤트 상세 ID
-     * @return 통과한 체크포인트 개수
-     */
-    fun getPassedCheckpointCount(
-        userId: String,
-        eventId: String,
-        eventDetailId: String
-    ): Long {
-        val key = generateCheckpointTimesKey(userId, eventId, eventDetailId)
-        
-        return try {
-            redisTemplate.opsForHash<String, String>().size(key)
-        } catch (e: Exception) {
-            logger.error("통과한 체크포인트 개수 조회 실패: " +
-                "userId=$userId, eventId=$eventId, eventDetailId=$eventDetailId", e)
-            0L
-        }
-    }
-    
-    /**
-     * Unix Timestamp를 LocalDateTime으로 변환
-     * 
-     * @param epochSeconds Unix Timestamp
-     * @return LocalDateTime
-     */
-    fun timestampToLocalDateTime(epochSeconds: Long): LocalDateTime {
-        return LocalDateTime.ofInstant(Instant.ofEpochSecond(epochSeconds), ZoneId.systemDefault())
-    }
-    
-    /**
-     * Unix Timestamp를 포맷된 문자열로 변환
-     * 
-     * @param epochSeconds Unix Timestamp
-     * @param pattern 날짜 포맷 패턴 (기본값: "yyyy-MM-dd HH:mm:ss")
-     * @return 포맷된 날짜 문자열
-     */
-    fun timestampToFormattedString(
-        epochSeconds: Long,
-        pattern: String = "yyyy-MM-dd HH:mm:ss"
-    ): String {
-        val dateTime = timestampToLocalDateTime(epochSeconds)
-        return dateTime.format(DateTimeFormatter.ofPattern(pattern))
     }
     
     /**

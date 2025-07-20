@@ -5,14 +5,11 @@ import com.sponovation.runtrack.common.ApiResponse
 import com.sponovation.runtrack.service.GpxService
 import com.sponovation.runtrack.service.CourseDataService
 import com.sponovation.runtrack.service.CheckpointTimesService
-import com.sponovation.runtrack.service.ParticipantSegmentRecordsService
 import com.sponovation.runtrack.service.LeaderboardService
 import com.sponovation.runtrack.service.GpxParsingRedisService
+import com.sponovation.runtrack.service.EventService
 import com.sponovation.runtrack.repository.EventDetailRepository
 import com.sponovation.runtrack.domain.EventDetail
-import com.sponovation.runtrack.domain.Event
-import com.sponovation.runtrack.enums.EventStatus
-import java.math.BigDecimal
 import java.util.*
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.Parameter
@@ -24,11 +21,10 @@ import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import org.springframework.web.multipart.MultipartFile
 import com.sponovation.runtrack.repository.EventRepository
-import java.time.LocalDate
-import java.time.LocalDateTime
 import org.springframework.data.redis.core.RedisTemplate
 import com.sponovation.runtrack.enums.ErrorCode
 import com.sponovation.runtrack.common.ErrorResponse
+import com.sponovation.runtrack.service.EventDetailService
 
 /**
  * GPX 경로 처리 및 위치 보정 API 컨트롤러
@@ -53,13 +49,12 @@ import com.sponovation.runtrack.common.ErrorResponse
 class GpxController(
     private val gpxService: GpxService,
     private val courseDataService: CourseDataService,
-    private val checkpointTimesService: CheckpointTimesService,
-    private val participantSegmentRecordsService: ParticipantSegmentRecordsService,
     private val leaderboardService: LeaderboardService,
     private val eventRepository: EventRepository,
     private val gpxParsingRedisService: GpxParsingRedisService,
     private val eventDetailRepository: EventDetailRepository,
-    private val redisTemplate: RedisTemplate<String, Any>
+    private val eventService: EventService,
+    private val eventDetailService: EventDetailService,
 ) {
 
     private val logger = LoggerFactory.getLogger(GpxController::class.java)
@@ -88,7 +83,7 @@ class GpxController(
      *
      * @param request GPS 위치 보정 요청 데이터
      *                - eventDetailId: 대회 상세 ID (필수)
-     *                - gpsData: GPS 좌표 정보 리스트 (위도, 경도, 고도, 정확도, 속도, 방향 등)
+     *                - gpsData: GPS 좌표 정보 (위도, 경도, 고도, 정확도, 속도, 방향 등)
      * @return 보정된 위치 정보 및 경로 매칭 결과
      *         - correctedLocations: 칼만 필터 및 맵 매칭을 통해 보정된 위치 리스트
      *         - matchingResults: 각 GPS 포인트의 경로 매칭 결과 (성공/실패, 거리 등)
@@ -118,7 +113,7 @@ class GpxController(
                 .body(ErrorResponse.create(HttpStatus.BAD_REQUEST, ErrorCode.INVALID_INPUT_VALUE, validationResult))
         }
         return try {
-            // 2. GPX 데이터 및 웨이포인트(CP) 조회 (Redis)
+            // 1. GPX 데이터 및 웨이포인트(CP) 조회 (Redis)
             val gpxParsingData = gpxParsingRedisService.getGpxParsingData(
                 eventId = request.eventId,
                 eventDetailId = request.eventDetailId
@@ -127,7 +122,7 @@ class GpxController(
             if (!gpxParsingData.success || gpxParsingData.points.isEmpty()) {
                 logger.warn("GPX 파싱 데이터 조회 실패: eventId=${request.eventId}, eventDetailId=${request.eventDetailId}")
 
-                // 3. GPX 데이터 로드 및 보간 - Redis에 데이터가 없으면 S3에서 로드
+                // 2. GPX 데이터 로드 및 보간 - Redis에 데이터가 없으면 S3에서 로드
                 try {
                     logger.info("S3에서 GPX 파일 로드 및 파싱 시작: eventId=${request.eventId}, eventDetailId=${request.eventDetailId}")
 
@@ -212,40 +207,8 @@ class GpxController(
                 }
             }
 
-            // 4. 위치 보정 처리
+            // 3. 위치 보정 처리
             val response = gpxService.correctLocation(request)
-
-            // 5. 체크포인트 통과 시간 기록 (GpxService에서 이미 처리됨)
-            response.checkpointReaches?.forEach { checkpointReach ->
-                try {
-                    logger.info(
-                        "체크포인트 통과 감지: userId=${request.userId}, " +
-                                "eventDetailId=${request.eventDetailId}, cpId=${checkpointReach.cpId}, " +
-                                "구간시간=${checkpointReach.segmentDuration ?: "N/A"}초, " +
-                                "누적시간=${checkpointReach.cumulativeTime ?: "N/A"}초"
-                    )
-
-                    // 리더보드 업데이트 (누적시간이 있는 경우)
-                    if (checkpointReach.cumulativeTime != null) {
-                        leaderboardService.updateLeaderboardFromCheckpoint(
-                            userId = request.userId,
-                            eventId = request.eventId,
-                            eventDetailId = request.eventDetailId,
-                            cpIndex = checkpointReach.cpIndex ?: 0,
-                            cumulativeTime = checkpointReach.cumulativeTime
-                        )
-
-                        logger.info(
-                            "리더보드 업데이트: userId=${request.userId}, " +
-                                    "eventDetailId=${request.eventDetailId}, checkpointId=${checkpointReach.checkpointId}, " +
-                                    "cumulativeTime=${checkpointReach.cumulativeTime}초"
-                        )
-                    }
-
-                } catch (e: Exception) {
-                    logger.warn("체크포인트 후처리 실패: ${e.message}")
-                }
-            }
 
             ResponseEntity.ok(ApiResponse(data = response))
 
@@ -324,8 +287,7 @@ class GpxController(
      *
      * 테스트 환경에서 Event 엔티티를 생성합니다.
      *
-     * @param eventId 생성할 Event의 ID
-     * @param eventName 이벤트 이름
+     * @param request Event 생성 요청 DTO
      * @return 생성된 Event 정보
      */
     @PostMapping("/create-test-event")
@@ -334,69 +296,35 @@ class GpxController(
         description = "테스트 환경에서 Event 엔티티를 생성합니다."
     )
     fun createTestEvent(
-        @Parameter(description = "생성할 Event ID", required = true)
-        @RequestParam("eventId") eventId: Long,
-        @Parameter(description = "이벤트 이름", required = true)
-        @RequestParam("name") name: String
+        @Parameter(description = "Event 생성 요청 데이터", required = true)
+        @Valid @RequestBody request: CreateTestEventRequestDto
     ): ResponseEntity<Any> {
 
         return try {
-            // 이미 존재하는 Event인지 확인
-            val existingEvent = eventRepository.findById(eventId)
-            if (existingEvent.isPresent) {
-                logger.info("이미 존재하는 Event 반환: eventId=$eventId")
-                val event = existingEvent.get()
-                val response = mapOf(
-                    "eventId" to event.id,
-                    "eventName" to event.name,
-                    "sports" to event.sports,
-                    "startDateTime" to event.startDateTime.toString(),
-                    "endDateTime" to event.endDateTime.toString(),
-                    "country" to event.country,
-                    "city" to event.city,
-                    "createdAt" to event.createdAt.toString(),
-                    "message" to "기존 이벤트 사용"
-                )
-                return ResponseEntity.ok(response)
-            }
-
-            // Event 생성 (ID 자동 생성 방식)
-            val event = Event(
-                name = name,
-                sports = "마라톤",
-                startDateTime = LocalDateTime.now().plusDays(1), // 내일 시작
-                endDateTime = LocalDateTime.now().plusDays(1).plusHours(6), // 내일 6시간 후 종료
-                country = "대한민국",
-                city = "서울",
-                address = "테스트 주소",
-                place = "테스트 장소",
-                latitude = 37.5413553485092.toBigDecimal(),
-                longitude = 127.115719020367.toBigDecimal(),
-                thumbnail = "test://thumbnail/test.jpg"
-            )
-
-            val savedEvent = eventRepository.save(event)
-
-            val response = mapOf(
-                "eventId" to savedEvent.id,
-                "eventName" to savedEvent.name,
-                "sports" to savedEvent.sports,
-                "startDateTime" to savedEvent.startDateTime.toString(),
-                "endDateTime" to savedEvent.endDateTime.toString(),
-                "country" to savedEvent.country,
-                "city" to savedEvent.city,
-                "isOngoing" to savedEvent.isOngoing(),
-                "isUpcoming" to savedEvent.isUpcoming(),
-                "createdAt" to savedEvent.createdAt.toString(),
-                "message" to "새 이벤트 생성"
-            )
-
-            logger.info("테스트 Event 생성 성공: eventId=${savedEvent.id}")
+            // 서비스 계층을 통해 Event 생성
+            val response = eventService.createTestEvent(request)
+            
+            logger.info("테스트 Event 생성 성공: eventId=${response.eventId}, name=${response.eventName}")
             ResponseEntity.ok(ApiResponse(data = response))
 
+        } catch (e: IllegalArgumentException) {
+            logger.warn("테스트 Event 생성 실패 - 잘못된 요청: ${e.message}")
+            ResponseEntity.badRequest().body(
+                ErrorResponse.create(
+                    HttpStatus.BAD_REQUEST,
+                    ErrorCode.INVALID_INPUT_VALUE,
+                    e.message ?: ErrorCode.INVALID_INPUT_VALUE.message
+                )
+            )
         } catch (e: Exception) {
-            logger.error("테스트 Event 생성 실패: eventId=$eventId", e)
-            ResponseEntity.internalServerError().build()
+            logger.error("테스트 Event 생성 실패: name=${request.name}", e)
+            ResponseEntity.internalServerError().body(
+                ErrorResponse.create(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    ErrorCode.API_BAD_REQUEST,
+                    e.message ?: ErrorCode.API_BAD_REQUEST.message
+                )
+            )
         }
     }
 
@@ -405,9 +333,7 @@ class GpxController(
      *
      * 테스트 환경에서 EventDetail 엔티티를 생성합니다.
      *
-     * @param eventId Event ID (Long)
-     * @param courseId EventDetail ID (Long을 UUID로 변환)
-     * @param courseName 코스 이름
+     * @param request EventDetail 생성 요청 DTO
      * @return 생성된 EventDetail 정보
      */
     @PostMapping("/create-test-course")
@@ -416,39 +342,35 @@ class GpxController(
         description = "테스트 환경에서 EventDetail 엔티티를 생성합니다."
     )
     fun createTestCourse(
-        @Parameter(description = "Event ID", required = true)
-        @RequestParam("eventId") eventId: Long,
-        @Parameter(description = "코스 이름", required = true)
-        @RequestParam("courseName") courseName: String
+        @Parameter(description = "EventDetail 생성 요청 데이터", required = true)
+        @Valid @RequestBody request: CreateTestCourseRequestDto
     ): ResponseEntity<Any> {
 
         return try {
-            // EventDetail 생성
-            val eventDetail = EventDetail(
-                eventId = eventId,
-                distance = 5, // 기본 5km
-                course = courseName,
-                gpxFile = "test://gpx/test_route.gpx"
-            )
-
-            val savedEventDetail = eventDetailRepository.save(eventDetail)
-
-            val response = mapOf(
-                "eventDetailId" to savedEventDetail.id,
-                "eventId" to savedEventDetail.eventId,
-                "distance" to savedEventDetail.distance,
-                "course" to savedEventDetail.course,
-                "gpxFile" to savedEventDetail.gpxFile,
-                "createdAt" to savedEventDetail.createdAt.toString(),
-                "message" to "새 이벤트 상세 생성"
-            )
-
-            logger.info("테스트 EventDetail 생성 성공: eventDetailId=${savedEventDetail.id}")
+            // 서비스 계층을 통해 EventDetail 생성
+            val response = eventDetailService.createTestCourse(request)
+            
+            logger.info("테스트 EventDetail 생성 성공: eventDetailId=${response.eventDetailId}, course=${response.course}")
             ResponseEntity.ok(ApiResponse(data = response))
 
+        } catch (e: IllegalArgumentException) {
+            logger.warn("테스트 EventDetail 생성 실패 - 잘못된 요청: ${e.message}")
+            ResponseEntity.badRequest().body(
+                ErrorResponse.create(
+                    HttpStatus.BAD_REQUEST,
+                    ErrorCode.INVALID_INPUT_VALUE,
+                    e.message ?: ErrorCode.INVALID_INPUT_VALUE.message
+                )
+            )
         } catch (e: Exception) {
-            logger.error("테스트 EventDetail 생성 실패: eventId=$eventId", e)
-            ResponseEntity.internalServerError().build()
+            logger.error("테스트 EventDetail 생성 실패: eventId=${request.eventId}, courseName=${request.courseName}", e)
+            ResponseEntity.internalServerError().body(
+                ErrorResponse.create(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    ErrorCode.API_BAD_REQUEST,
+                    e.message ?: ErrorCode.API_BAD_REQUEST.message
+                )
+            )
         }
     }
 
@@ -667,136 +589,6 @@ class GpxController(
     }
 
     /**
-     * 참가자의 체크포인트 통과 시간 조회
-     *
-     * @param userId 사용자 ID
-     * @param eventDetailId 이벤트 상세 ID
-     * @return 체크포인트 통과 시간 목록
-     */
-    @GetMapping("/checkpoint-times/{userId}/{eventId}/{eventDetailId}")
-    @Operation(
-        summary = "참가자의 체크포인트 통과 시간 조회",
-        description = "특정 참가자의 모든 체크포인트 통과 시간을 조회합니다."
-    )
-    fun getCheckpointTimes(
-        @Parameter(description = "사용자 ID", required = true)
-        @PathVariable userId: Long,
-        @Parameter(description = "이벤트 ID", required = true)
-        @PathVariable eventId: Long,
-        @Parameter(description = "이벤트 상세 ID", required = true)
-        @PathVariable eventDetailId: Long
-    ): ResponseEntity<Any> {
-
-        return try {
-            logger.info("체크포인트 통과 시간 조회: userId=$userId, eventDetailId=$eventDetailId")
-
-            val allPassTimes = checkpointTimesService.getAllCheckpointPassTimes(
-                userId = userId,
-                eventId = eventId,
-                eventDetailId = eventDetailId
-            )
-
-            val checkpointTimesDto = allPassTimes.map { (checkpointId, passTime) ->
-                CheckpointPassTimeDto(
-                    checkpointId = checkpointId,
-                    passTime = passTime,
-                    passTimeFormatted = checkpointTimesService.timestampToFormattedString(passTime)
-                )
-            }.sortedBy { it.passTime }
-
-            val response = AllCheckpointTimesResponseDto(
-                userId = userId.toString(),
-                eventId = "event_$eventDetailId",
-                eventDetailId = eventDetailId.toString(),
-                checkpointTimes = checkpointTimesDto,
-                totalCount = checkpointTimesDto.size
-            )
-
-            ResponseEntity.ok(ApiResponse(data = response))
-
-        } catch (e: Exception) {
-            logger.error("체크포인트 통과 시간 조회 실패: userId=$userId, eventDetailId=$eventDetailId", e)
-            return ResponseEntity.internalServerError().body(
-                ErrorResponse.create(
-                    HttpStatus.INTERNAL_SERVER_ERROR,
-                    ErrorCode.API_BAD_REQUEST,
-                    e.message ?: ErrorCode.API_BAD_REQUEST.message
-                )
-            )
-        }
-    }
-
-    /**
-     * 체크포인트 통과 여부 확인
-     *
-     * @param userId 사용자 ID
-     * @param eventDetailId 이벤트 상세 ID
-     * @param checkpointId 체크포인트 ID
-     * @return 체크포인트 통과 여부 및 통과 시간
-     */
-    @GetMapping("/checkpoint-times/{userId}/{eventDetailId}/status/{checkpointId}")
-    @Operation(
-        summary = "체크포인트 통과 여부 확인",
-        description = "특정 체크포인트의 통과 여부를 확인하고 통과 시간을 반환합니다."
-    )
-    fun checkCheckpointStatus(
-        @Parameter(description = "사용자 ID", required = true)
-        @PathVariable userId: Long,
-        @Parameter(description = "이벤트 상세 ID", required = true)
-        @PathVariable eventDetailId: Long,
-        @Parameter(description = "체크포인트 ID", required = true)
-        @PathVariable checkpointId: String
-    ): ResponseEntity<Any> {
-
-        return try {
-            logger.info("체크포인트 통과 여부 확인: userId=$userId, eventDetailId=$eventDetailId, checkpointId=$checkpointId")
-
-            val hasPassed = checkpointTimesService.hasPassedCheckpoint(
-                userId = userId.toString(),
-                eventId = "event_$eventDetailId",
-                eventDetailId = eventDetailId.toString(),
-                checkpointId = checkpointId
-            )
-
-            val passTime = if (hasPassed) {
-                checkpointTimesService.getCheckpointPassTime(
-                    userId = userId.toString(),
-                    eventId = "event_$eventDetailId",
-                    eventDetailId = eventDetailId.toString(),
-                    checkpointId = checkpointId
-                )
-            } else null
-
-            val response = CheckpointPassStatusDto(
-                userId = userId.toString(),
-                eventId = "event_$eventDetailId",
-                eventDetailId = eventDetailId.toString(),
-                checkpointId = checkpointId,
-                hasPassed = hasPassed,
-                passTime = passTime,
-                passTimeFormatted = passTime?.let {
-                    checkpointTimesService.timestampToFormattedString(it)
-                }
-            )
-
-            ResponseEntity.ok(ApiResponse(data = response))
-
-        } catch (e: Exception) {
-            logger.error(
-                "체크포인트 통과 여부 확인 실패: userId=$userId, eventDetailId=$eventDetailId, checkpointId=$checkpointId",
-                e
-            )
-            return ResponseEntity.internalServerError().body(
-                ErrorResponse.create(
-                    HttpStatus.INTERNAL_SERVER_ERROR,
-                    ErrorCode.API_BAD_REQUEST,
-                    e.message ?: ErrorCode.API_BAD_REQUEST.message
-                )
-            )
-        }
-    }
-
-    /**
      * eventDetailId를 통해 EventDetail 조회
      *
      * @param eventDetailId 이벤트 상세 ID
@@ -865,219 +657,6 @@ class GpxController(
             override fun transferTo(dest: java.io.File) {
                 dest.writeBytes(bytes)
             }
-        }
-    }
-
-    /**
-     * 시작 시간 계산 (임시 구현)
-     *
-     * @param userId 사용자 ID
-     * @param eventDetailId 이벤트 상세 ID
-     * @return 시작 시간 (Unix Timestamp)
-     */
-    private fun calculateStartTime(userId: String, eventDetailId: String): Long? {
-        // 임시로 현재 시간에서 1시간 전을 시작 시간으로 사용
-        // 실제 구현에서는 이벤트 시작 시간을 DB에서 조회하거나 
-        // 첫 번째 GPS 데이터의 시간을 사용해야 합니다
-        return java.time.Instant.now().epochSecond - 3600 // 1시간 전
-    }
-
-    /**
-     * 참가자의 구간별 기록 조회
-     *
-     * @param userId 사용자 ID
-     * @param eventDetailId 이벤트 상세 ID
-     * @return 구간별 기록 목록
-     */
-    @GetMapping("/segment-records/{userId}/{eventDetailId}")
-    @Operation(
-        summary = "참가자의 구간별 기록 조회",
-        description = "특정 참가자의 모든 구간별 기록을 조회합니다."
-    )
-    fun getSegmentRecords(
-        @Parameter(description = "사용자 ID", required = true)
-        @PathVariable userId: Long,
-        @Parameter(description = "이벤트 상세 ID", required = true)
-        @PathVariable eventDetailId: Long
-    ): ResponseEntity<Any> {
-
-        return try {
-            logger.info("구간별 기록 조회: userId=$userId, eventDetailId=$eventDetailId")
-
-            val allRecords = participantSegmentRecordsService.getAllSegmentRecords(
-                userId = userId.toString(),
-                eventId = "event_$eventDetailId",
-                eventDetailId = eventDetailId.toString()
-            )
-
-            val segmentRecords = allRecords.map { (checkpointId, recordPair) ->
-                val (segmentDuration, cumulativeTime) = recordPair
-                SegmentRecordDto(
-                    checkpointId = checkpointId,
-                    segmentDuration = segmentDuration,
-                    cumulativeTime = cumulativeTime,
-                    segmentDurationFormatted = participantSegmentRecordsService.formatTime(segmentDuration),
-                    cumulativeTimeFormatted = participantSegmentRecordsService.formatTime(cumulativeTime)
-                )
-            }.sortedBy { it.cumulativeTime }
-
-            val totalTime = segmentRecords.maxOfOrNull { it.cumulativeTime } ?: 0L
-
-            val response = ParticipantSegmentRecordsDto(
-                userId = userId.toString(),
-                eventId = "event_$eventDetailId",
-                eventDetailId = eventDetailId.toString(),
-                segmentRecords = segmentRecords,
-                totalSegments = segmentRecords.size,
-                totalTime = totalTime,
-                totalTimeFormatted = participantSegmentRecordsService.formatTime(totalTime)
-            )
-
-            ResponseEntity.ok(ApiResponse(data = response))
-
-        } catch (e: Exception) {
-            logger.error("구간별 기록 조회 실패: userId=$userId, eventDetailId=$eventDetailId", e)
-            return ResponseEntity.internalServerError().body(
-                ErrorResponse.create(
-                    HttpStatus.INTERNAL_SERVER_ERROR,
-                    ErrorCode.API_BAD_REQUEST,
-                    e.message ?: ErrorCode.API_BAD_REQUEST.message
-                )
-            )
-        }
-    }
-
-    /**
-     * 특정 체크포인트의 구간별 기록 조회
-     *
-     * @param userId 사용자 ID
-     * @param eventDetailId 이벤트 상세 ID
-     * @param checkpointId 체크포인트 ID
-     * @return 구간별 기록 정보
-     */
-    @GetMapping("/segment-records/{userId}/{eventDetailId}/{checkpointId}")
-    @Operation(
-        summary = "특정 체크포인트의 구간별 기록 조회",
-        description = "특정 체크포인트의 구간별 기록을 조회합니다."
-    )
-    fun getSingleSegmentRecord(
-        @Parameter(description = "사용자 ID", required = true)
-        @PathVariable userId: Long,
-        @Parameter(description = "이벤트 상세 ID", required = true)
-        @PathVariable eventDetailId: Long,
-        @Parameter(description = "체크포인트 ID", required = true)
-        @PathVariable checkpointId: String
-    ): ResponseEntity<Any> {
-
-        return try {
-            logger.info("단일 구간별 기록 조회: userId=$userId, eventDetailId=$eventDetailId, checkpointId=$checkpointId")
-
-            val segmentDuration = participantSegmentRecordsService.getSegmentDuration(
-                userId = userId.toString(),
-                eventId = "event_$eventDetailId",
-                eventDetailId = eventDetailId.toString(),
-                checkpointId = checkpointId
-            )
-
-            val cumulativeTime = participantSegmentRecordsService.getCumulativeTime(
-                userId = userId.toString(),
-                eventId = "event_$eventDetailId",
-                eventDetailId = eventDetailId.toString(),
-                checkpointId = checkpointId
-            )
-
-            val hasRecord = segmentDuration != null && cumulativeTime != null
-
-            val response = SingleSegmentRecordDto(
-                userId = userId.toString(),
-                eventId = "event_$eventDetailId",
-                eventDetailId = eventDetailId.toString(),
-                checkpointId = checkpointId,
-                segmentDuration = segmentDuration,
-                cumulativeTime = cumulativeTime,
-                segmentDurationFormatted = segmentDuration?.let {
-                    participantSegmentRecordsService.formatTime(it)
-                },
-                cumulativeTimeFormatted = cumulativeTime?.let {
-                    participantSegmentRecordsService.formatTime(it)
-                },
-                hasRecord = hasRecord
-            )
-
-            ResponseEntity.ok(ApiResponse(data = response))
-
-        } catch (e: Exception) {
-            logger.error("단일 구간별 기록 조회 실패: userId=$userId, eventDetailId=$eventDetailId, checkpointId=$checkpointId", e)
-            return ResponseEntity.internalServerError().body(
-                ErrorResponse.create(
-                    HttpStatus.INTERNAL_SERVER_ERROR,
-                    ErrorCode.API_BAD_REQUEST,
-                    e.message ?: ErrorCode.API_BAD_REQUEST.message
-                )
-            )
-        }
-    }
-
-    /**
-     * 구간별 기록 통계 조회
-     *
-     * @param userId 사용자 ID
-     * @param eventDetailId 이벤트 상세 ID
-     * @return 구간별 기록 통계
-     */
-    @GetMapping("/segment-records/{userId}/{eventDetailId}/stats")
-    @Operation(
-        summary = "구간별 기록 통계 조회",
-        description = "참가자의 구간별 기록 통계를 조회합니다."
-    )
-    fun getSegmentRecordStats(
-        @Parameter(description = "사용자 ID", required = true)
-        @PathVariable userId: Long,
-        @Parameter(description = "이벤트 상세 ID", required = true)
-        @PathVariable eventDetailId: Long
-    ): ResponseEntity<Any> {
-
-        return try {
-            logger.info("구간별 기록 통계 조회: userId=$userId, eventDetailId=$eventDetailId")
-
-            val stats = participantSegmentRecordsService.getSegmentRecordStats(
-                userId = userId.toString(),
-                eventId = "event_$eventDetailId",
-                eventDetailId = eventDetailId.toString()
-            )
-
-            val response = SegmentRecordStatsDto(
-                userId = userId.toString(),
-                eventId = "event_$eventDetailId",
-                eventDetailId = eventDetailId.toString(),
-                totalCheckpoints = stats["totalCheckpoints"] as? Int ?: 0,
-                totalTime = stats["totalTime"] as? Long ?: 0L,
-                totalTimeFormatted = participantSegmentRecordsService.formatTime(stats["totalTime"] as? Long ?: 0L),
-                fastestSegment = stats["fastestSegment"] as? Long,
-                fastestSegmentFormatted = (stats["fastestSegment"] as? Long)?.let {
-                    participantSegmentRecordsService.formatTime(it)
-                },
-                slowestSegment = stats["slowestSegment"] as? Long,
-                slowestSegmentFormatted = (stats["slowestSegment"] as? Long)?.let {
-                    participantSegmentRecordsService.formatTime(it)
-                },
-                averageSegmentTime = stats["averageSegmentTime"] as? Double ?: 0.0,
-                averageSegmentTimeFormatted = participantSegmentRecordsService.formatTime(
-                    (stats["averageSegmentTime"] as? Double ?: 0.0).toLong()
-                )
-            )
-
-            ResponseEntity.ok(ApiResponse(data = response))
-
-        } catch (e: Exception) {
-            logger.error("구간별 기록 통계 조회 실패: userId=$userId, eventDetailId=$eventDetailId", e)
-            return ResponseEntity.internalServerError().body(
-                ErrorResponse.create(
-                    HttpStatus.INTERNAL_SERVER_ERROR,
-                    ErrorCode.API_BAD_REQUEST,
-                    e.message ?: ErrorCode.API_BAD_REQUEST.message
-                )
-            )
         }
     }
 
@@ -1402,263 +981,6 @@ class GpxController(
 
         val bearing = Math.toDegrees(Math.atan2(y, x))
         return (bearing + 360) % 360
-    }
-
-    /**
-     * 단일 유저의 GPS 데이터 배열 전송 (모바일 테스트용)
-     */
-    @PostMapping("/send-user-gps-batch")
-    @Operation(
-        summary = "단일 유저 GPS 데이터 배치 전송",
-        description = "생성된 GPS 데이터 배열을 한 번에 전송하여 테스트합니다."
-    )
-    fun sendUserGpsBatch(
-        @Parameter(description = "유저 ID", required = true)
-        @RequestParam userId: Int,
-        @Parameter(description = "이벤트 ID", required = false)
-        @RequestParam(defaultValue = "1") eventId: Long,
-        @Parameter(description = "이벤트 상세 ID", required = false)
-        @RequestParam(defaultValue = "100") eventDetailId: Long,
-        @Parameter(description = "처리 간격 (밀리초)", required = false)
-        @RequestParam(defaultValue = "1000") processingIntervalMs: Long
-    ): ResponseEntity<Any> {
-
-        return try {
-            logger.info("유저 GPS 데이터 배치 전송 시작: userId=$userId")
-
-            // 먼저 fake GPS 데이터 생성
-            val fakeDataResponse = generateFakeGpsData(eventId, eventDetailId, 10, 15.0)
-            val fakeData =
-                fakeDataResponse.body as? Map<String, Any> ?: return ResponseEntity.internalServerError().body(
-                    mapOf(
-                        "success" to false,
-                        "message" to "Fake GPS 데이터 생성 실패"
-                    )
-                )
-
-            @Suppress("UNCHECKED_CAST")
-            val users =
-                fakeData["users"] as? List<Map<String, Any>> ?: return ResponseEntity.internalServerError().body(
-                    mapOf(
-                        "success" to false,
-                        "message" to "유저 데이터 조회 실패"
-                    )
-                )
-
-            // 해당 유저의 데이터 찾기
-            val userGpsData = users.find { (it["userId"] as? Int) == userId }
-                ?: return ResponseEntity.badRequest().body(
-                    mapOf(
-                        "success" to false,
-                        "message" to "유저 ID $userId 를 찾을 수 없습니다."
-                    )
-                )
-
-            @Suppress("UNCHECKED_CAST")
-            val gpsDataList =
-                userGpsData["gpsData"] as? List<Map<String, Any>> ?: return ResponseEntity.internalServerError().body(
-                    mapOf(
-                        "success" to false,
-                        "message" to "GPS 데이터 조회 실패"
-                    )
-                )
-            val results = mutableListOf<Map<String, Any>>()
-
-            logger.info("총 ${gpsDataList.size}개의 GPS 데이터를 순차 전송합니다.")
-
-            gpsDataList.forEachIndexed { index, gpsPoint ->
-                try {
-                    // GPS 데이터 형식 변환
-                    val gpsLocationData = CorrectLocationRequestDto.GpsLocationData(
-                        lat = gpsPoint["lat"] as Double,
-                        lng = gpsPoint["lng"] as Double,
-                        altitude = gpsPoint["altitude"] as? Double,
-                        accuracy = (gpsPoint["accuracy"] as? Double)?.toFloat(),
-                        speed = (gpsPoint["speed"] as? Double)?.toFloat(),
-                        bearing = (gpsPoint["bearing"] as? Double)?.toFloat(),
-                        timestamp = gpsPoint["timestamp"] as String
-                    )
-
-                    val requestDto = CorrectLocationRequestDto(
-                        userId = userId.toLong(),
-                        eventId = eventId,
-                        eventDetailId = eventDetailId,
-                        gpsData = listOf(gpsLocationData)
-                    )
-
-                    // 위치 보정 API 호출
-                    val correctionResult = gpxService.correctLocation(requestDto)
-
-                    results.add(
-                        mapOf(
-                            "index" to index,
-                            "success" to true,
-                            "gpsPoint" to gpsPoint,
-                            "correctionResult" to correctionResult
-                        )
-                    )
-
-                    // 처리 간격 대기
-                    Thread.sleep(processingIntervalMs)
-
-                    if (index % 10 == 0) {
-                        logger.info("진행률: ${index}/${gpsDataList.size} (${(index.toDouble() / gpsDataList.size * 100).toInt()}%)")
-                    }
-
-                } catch (e: Exception) {
-                    logger.error("GPS 데이터 처리 실패: index=$index", e)
-                    results.add(
-                        mapOf(
-                            "index" to index,
-                            "success" to false,
-                            "error" to (e.message ?: "Unknown error"),
-                            "gpsPoint" to gpsPoint
-                        )
-                    )
-                }
-            }
-
-            val successCount = results.count { it["success"] as Boolean }
-            val failCount = results.size - successCount
-
-            val response = mapOf(
-                "success" to true,
-                "message" to "GPS 데이터 배치 전송 완료",
-                "userId" to userId,
-                "userName" to (userGpsData["name"] as? String ?: "Unknown"),
-                "totalPoints" to gpsDataList.size,
-                "successCount" to successCount,
-                "failCount" to failCount,
-                "processingTimeSeconds" to (gpsDataList.size * processingIntervalMs / 1000),
-                "results" to results
-            )
-
-            logger.info("GPS 데이터 배치 전송 완료: userId=$userId, 성공=$successCount, 실패=$failCount")
-            ResponseEntity.ok(ApiResponse(data = response))
-
-        } catch (e: Exception) {
-            logger.error("GPS 데이터 배치 전송 실패: userId=$userId", e)
-            return ResponseEntity.internalServerError().body(
-                ErrorResponse.create(
-                    HttpStatus.INTERNAL_SERVER_ERROR,
-                    ErrorCode.API_BAD_REQUEST,
-                    e.message ?: ErrorCode.API_BAD_REQUEST.message
-                )
-            )
-        }
-    }
-
-
-    @GetMapping("/location/all/{eventDetailId}")
-    @Operation(
-        summary = "이벤트 내 전체 유저 위치 데이터 조회",
-        description = "location:*:{eventDetailId} 패턴에 매칭되는 모든 유저의 위치 데이터를 조회합니다."
-    )
-    fun getAllUserLocationsByEventDetailId(
-        @Parameter(description = "이벤트 상세 ID", required = true)
-        @PathVariable eventDetailId: Long
-    ): ResponseEntity<Any> {
-        return try {
-            val pattern = "location:*:$eventDetailId"
-            val keys = redisTemplate.keys(pattern)
-            if (keys.isNullOrEmpty()) {
-                return ResponseEntity.notFound().build()
-            }
-            val locations = keys.mapNotNull { key ->
-                val type = redisTemplate.type(key)?.code()
-                if (type == "string") {
-                    redisTemplate.opsForValue().get(key)
-                } else {
-                    null
-                }
-            }
-            ResponseEntity.ok(ApiResponse(data = locations))
-        } catch (e: Exception) {
-            logger.error("전체 유저 위치 데이터 조회 실패: eventDetailId=$eventDetailId", e)
-            return ResponseEntity.internalServerError().body(
-                ErrorResponse.create(
-                    HttpStatus.INTERNAL_SERVER_ERROR,
-                    ErrorCode.API_BAD_REQUEST,
-                    e.message ?: ErrorCode.API_BAD_REQUEST.message
-                )
-            )
-        }
-    }
-
-    @GetMapping("/segment-records/all/{eventId}/{eventDetailId}")
-    @Operation(
-        summary = "이벤트 내 전체 유저 구간별 기록 데이터 조회",
-        description = "participantSegmentRecords:*:{eventId}:{eventDetailId} 패턴에 매칭되는 모든 유저의 구간별 기록 데이터를 조회합니다."
-    )
-    fun getAllUserSegmentRecordsByEvent(
-        @Parameter(description = "이벤트 ID", required = true)
-        @PathVariable eventId: Long,
-        @Parameter(description = "이벤트 상세 ID", required = true)
-        @PathVariable eventDetailId: Long
-    ): ResponseEntity<Any> {
-        return try {
-            val pattern = "participantSegmentRecords:*:$eventId:$eventDetailId"
-            val keys = redisTemplate.keys(pattern)
-            if (keys.isNullOrEmpty()) {
-                return ResponseEntity.notFound().build()
-            }
-            val records = keys.mapNotNull { key ->
-                val type = redisTemplate.type(key)?.code()
-                if (type == "string") {
-                    redisTemplate.opsForValue().get(key)
-                } else {
-                    null
-                }
-            }
-            ResponseEntity.ok(ApiResponse(data = records))
-        } catch (e: Exception) {
-            logger.error("전체 유저 구간별 기록 데이터 조회 실패: eventId=$eventId, eventDetailId=$eventDetailId", e)
-            return ResponseEntity.internalServerError().body(
-                ErrorResponse.create(
-                    HttpStatus.INTERNAL_SERVER_ERROR,
-                    ErrorCode.API_BAD_REQUEST,
-                    e.message ?: ErrorCode.API_BAD_REQUEST.message
-                )
-            )
-        }
-    }
-
-    @GetMapping("/leaderboard/all/{eventDetailId}")
-    @Operation(
-        summary = "이벤트 리더보드 전체 데이터 조회",
-        description = "leaderboard:{eventDetailId} 키에 저장된 전체 리더보드 데이터를 조회합니다."
-    )
-    fun getLeaderboardByEventDetailId(
-        @Parameter(description = "이벤트 상세 ID", required = true)
-        @PathVariable eventDetailId: Long
-    ): ResponseEntity<Any> {
-        return try {
-            val key = "leaderboard:$eventDetailId"
-            val type = redisTemplate.type(key)?.code()
-            if (type != "zset") {
-                return ResponseEntity.notFound().build()
-            }
-            val zset = redisTemplate.opsForZSet().rangeWithScores(key, 0, -1)
-            if (zset.isNullOrEmpty()) {
-                return ResponseEntity.notFound().build()
-            }
-            val result = zset.map { tuple ->
-                mapOf(
-                    "member" to tuple.value,
-                    "score" to tuple.score
-                )
-            }
-            ResponseEntity.ok(ApiResponse(data = result))
-        } catch (e: Exception) {
-            logger.error("리더보드 데이터 조회 실패: eventDetailId=$eventDetailId", e)
-            return ResponseEntity.internalServerError().body(
-                ErrorResponse.create(
-                    HttpStatus.INTERNAL_SERVER_ERROR,
-                    ErrorCode.API_BAD_REQUEST,
-                    e.message ?: ErrorCode.API_BAD_REQUEST.message
-                )
-            )
-        }
     }
 }
 

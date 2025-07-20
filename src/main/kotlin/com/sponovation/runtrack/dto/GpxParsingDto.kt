@@ -32,23 +32,6 @@ data class GpxParsingPointDto(
 )
 
 /**
- * GPX 파싱 데이터 요청 DTO
- */
-data class GpxParsingRequestDto(
-    @JsonProperty("eventId")
-    val eventId: Long,
-    
-    @JsonProperty("eventDetailId")
-    val eventDetailId: Long,
-    
-    @JsonProperty("checkpointDistanceInterval")
-    val checkpointDistanceInterval: Double = 1000.0, // 기본 1km 간격
-    
-    @JsonProperty("interpolationInterval")
-    val interpolationInterval: Double = 100.0 // 기본 100m 간격
-)
-
-/**
  * GPX 파싱 데이터 응답 DTO
  */
 data class GpxParsingResponseDto(

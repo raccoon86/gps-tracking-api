@@ -4,6 +4,7 @@ import com.sponovation.runtrack.domain.Tracker
 import com.sponovation.runtrack.dto.*
 import com.sponovation.runtrack.repository.ParticipantRepository
 import com.sponovation.runtrack.repository.TrackerRepository
+import com.sponovation.runtrack.repository.TrackedParticipantProjection
 import com.sponovation.runtrack.repository.UserRepository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -25,7 +26,7 @@ class TrackerService(
 //            throw IllegalArgumentException("존재하지 않는 사용자입니다: ${request.userId}")
 //        }
 //
-        if (!participantRepository.existsById(request.participantId)) {
+        if (!participantRepository.existsByUserId(request.participantId)) {
             throw IllegalArgumentException("존재하지 않는 참가자입니다: ${request.participantId}")
         }
 
@@ -55,27 +56,24 @@ class TrackerService(
      */
     @Transactional(readOnly = true)
     fun getTrackerList(userId: Long): TrackerListResponseDto {
-//        // 사용자 존재 여부 확인
-//        if (userId < 10000 && !userRepository.existsById(userId)) {
-//            throw IllegalArgumentException("존재하지 않는 사용자입니다: $userId")
-//        }
 
-        // 사용자가 트래킹하는 참가자 목록 조회
-        val participants = trackerRepository.findParticipantsByUserId(userId)
+        // 사용자가 트래킹하는 참가자 목록 조회 (Projection 사용)
+        val trackedParticipants = trackerRepository.findTrackedParticipantsByUserId(userId)
 
-        val trackerItems = participants.map { participant ->
-            TrackerItemDto(
-                participantId = participant.id,
-                name = participant.name,
-                nickname = participant.nickname,
-                bibNumber = participant.bibNumber,
-                profileImageUrl = participant.profileImageUrl,
-                country = participant.country
+        val participants = trackedParticipants.map { projection ->
+            TrackedParticipantDto(
+                participantId = projection.getParticipantId(),
+                name = projection.getName(),
+                bibNumber = projection.getBibNumber(),
+                country = projection.getCountry(),
+                profileImage = projection.getProfileImage(),
+                trackedAt = projection.getTrackedAt().toString()
             )
         }
 
         return TrackerListResponseDto(
-            participants = trackerItems
+            participants = participants,
+            totalCount = participants.size
         )
     }
 
@@ -89,26 +87,27 @@ class TrackerService(
 //            throw IllegalArgumentException("존재하지 않는 사용자입니다: $userId")
 //        }
 
-        // 특정 이벤트에서 사용자가 트래킹하는 참가자 목록 조회
-        val participants = trackerRepository.findParticipantsByUserIdAndEventIdAndEventDetailId(
+        // 특정 이벤트에서 사용자가 트래킹하는 참가자 목록 조회 (Projection 사용)
+        val trackedParticipants = trackerRepository.findTrackedParticipantsByUserIdAndEvent(
             userId, 
             eventId, 
             eventDetailId
         )
 
-        val trackerItems = participants.map { participant ->
-            TrackerItemDto(
-                participantId = participant.id,
-                name = participant.name,
-                nickname = participant.nickname,
-                bibNumber = participant.bibNumber,
-                profileImageUrl = participant.profileImageUrl,
-                country = participant.country
+        val participants = trackedParticipants.map { projection ->
+            TrackedParticipantDto(
+                participantId = projection.getParticipantId(),
+                name = projection.getName(),
+                bibNumber = projection.getBibNumber(),
+                country = projection.getCountry(),
+                profileImage = projection.getProfileImage(),
+                trackedAt = projection.getTrackedAt().toString()
             )
         }
 
         return TrackerListResponseDto(
-            participants = trackerItems
+            participants = participants,
+            totalCount = participants.size
         )
     }
 
@@ -147,45 +146,5 @@ class TrackerService(
         } else {
             "트래킹 삭제에 실패했습니다"
         }
-    }
-
-    /**
-     * 트래킹 통계 조회
-     */
-    @Transactional(readOnly = true)
-    fun getTrackerStats(userId: Long): Map<String, Any> {
-//        if (userId < 10000 && !userRepository.existsById(userId)) {
-//            throw IllegalArgumentException("존재하지 않는 사용자입니다: $userId")
-//        }
-
-        val trackingCount = trackerRepository.countByUserId(userId)
-        
-        return mapOf(
-            "userId" to userId,
-            "trackingCount" to trackingCount
-        )
-    }
-
-    /**
-     * 특정 이벤트에서 트래킹 통계 조회
-     */
-    @Transactional(readOnly = true)
-    fun getTrackerStats(userId: Long, eventId: Long, eventDetailId: Long): Map<String, Any> {
-//        if (userId < 10000 && !userRepository.existsById(userId)) {
-//            throw IllegalArgumentException("존재하지 않는 사용자입니다: $userId")
-//        }
-
-        val trackingCount = trackerRepository.countByUserIdAndEventIdAndEventDetailId(
-            userId, 
-            eventId, 
-            eventDetailId
-        )
-        
-        return mapOf(
-            "userId" to userId,
-            "eventId" to eventId,
-            "eventDetailId" to eventDetailId,
-            "trackingCount" to trackingCount
-        )
     }
 } 

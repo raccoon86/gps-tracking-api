@@ -1,7 +1,6 @@
 package com.sponovation.runtrack.dto
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.sponovation.runtrack.domain.Gender
 import io.swagger.v3.oas.annotations.media.Schema
 import jakarta.validation.constraints.*
 import java.time.LocalDateTime
@@ -38,27 +37,27 @@ data class ParticipantRequestDto(
     @Schema(description = "닉네임", example = "러너")
     @JsonProperty("nickname")
     @field:Size(max = 30, message = "닉네임은 30자를 초과할 수 없습니다")
-    val nickname: String? = null,
+    val nickname: String,
 
     @Schema(description = "국가명 (영어)", example = "South Korea")
     @JsonProperty("country")
     @field:Size(max = 50, message = "국가명은 50자를 초과할 수 없습니다")
-    val country: String? = null,
+    val country: String,
 
     @Schema(description = "프로필 이미지 URL", example = "https://example.com/profile.jpg")
     @JsonProperty("profileImageUrl")
     @field:Size(max = 500, message = "프로필 이미지 URL은 500자를 초과할 수 없습니다")
-    val profileImageUrl: String? = null,
-
-    @Schema(description = "나이", example = "25")
-    @JsonProperty("age")
-    @field:Min(value = 1, message = "나이는 1세 이상이어야 합니다")
-    @field:Max(value = 150, message = "나이는 150세 이하여야 합니다")
-    val age: Int? = null,
+    val profileImageUrl: String,
 
     @Schema(description = "성별 (M: 남성, F: 여성)", example = "M")
     @JsonProperty("gender")
-    val gender: Gender? = null,
+    val gender: String? = "M",
+
+    @Schema(description = "생년월일", example = "1990-01-01")
+    @JsonProperty("birthday")
+    @field:NotNull(message = "생년월일은 필수입니다")
+    @field:Past(message = "생년월일은 과거여야 합니다")
+    val birthday: LocalDateTime,
 
     @Schema(description = "참가 상태", example = "REGISTERED", required = true)
     @JsonProperty("status")
@@ -89,7 +88,7 @@ data class ParticipantRequestDto(
     @Schema(description = "경기 상태", example = "READY")
     @JsonProperty("raceStatus")
     @field:Size(max = 20, message = "경기 상태는 20자를 초과할 수 없습니다")
-    val raceStatus: String? = null
+    val raceStatus: String
 )
 
 /**
@@ -125,7 +124,13 @@ data class UpdateParticipantRequestDto(
 
     @Schema(description = "성별 (M: 남성, F: 여성)", example = "M")
     @JsonProperty("gender")
-    val gender: Gender? = null,
+    val gender: String? = "M",
+
+    @Schema(description = "생년월일", example = "1990-01-01")
+    @JsonProperty("birthday")
+    @field:NotNull(message = "생년월일은 필수입니다")
+    @field:Past(message = "생년월일은 과거여야 합니다")
+    val birthday: LocalDateTime? = null,
 
     @Schema(description = "참가 상태", example = "APPROVED")
     @JsonProperty("status")
@@ -185,23 +190,23 @@ data class ParticipantResponseDto(
 
     @Schema(description = "닉네임", example = "러너")
     @JsonProperty("nickname")
-    val nickname: String?,
+    val nickname: String,
 
     @Schema(description = "국가명 (영어)", example = "South Korea")
     @JsonProperty("country")
-    val country: String?,
+    val country: String,
 
     @Schema(description = "프로필 이미지 URL", example = "https://example.com/profile.jpg")
     @JsonProperty("profileImageUrl")
-    val profileImageUrl: String?,
-
-    @Schema(description = "나이", example = "25")
-    @JsonProperty("age")
-    val age: Int?,
+    val profileImageUrl: String,
 
     @Schema(description = "성별", example = "M")
     @JsonProperty("gender")
-    val gender: Gender?,
+    val gender: String? = "M",
+
+    @Schema(description = "생년월일", example = "1990-01-01")
+    @JsonProperty("birthday")
+    val birthday: LocalDateTime?,
 
     @Schema(description = "참가 상태", example = "APPROVED")
     @JsonProperty("status")
@@ -229,7 +234,7 @@ data class ParticipantResponseDto(
 
     @Schema(description = "경기 상태", example = "RACING")
     @JsonProperty("raceStatus")
-    val raceStatus: String?,
+    val raceStatus: String,
 
     @Schema(description = "생성 일시", example = "2024-11-01T10:00:00")
     @JsonProperty("createdAt")

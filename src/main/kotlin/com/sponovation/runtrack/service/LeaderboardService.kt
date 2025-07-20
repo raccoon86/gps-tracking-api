@@ -26,7 +26,6 @@ import org.springframework.stereotype.Service
 @Service
 class LeaderboardService(
     private val redisTemplate: RedisTemplate<String, Any>,
-    private val checkpointTimesService: CheckpointTimesService
 ) {
     
     private val logger = LoggerFactory.getLogger(LeaderboardService::class.java)
@@ -54,7 +53,7 @@ class LeaderboardService(
         checkpointOrder: Int,
         cumulativeTime: Long
     ) {
-        val key = generateLeaderboardKey(eventDetailId.toString())
+        val key = generateLeaderboardKey(eventId.toString(), eventDetailId.toString())
         
         try {
             // 점수 계산: (체크포인트 순서 * 가중치) + 누적 시간 + 기본 점수
@@ -99,164 +98,6 @@ class LeaderboardService(
     }
     
     /**
-     * 참가자의 전체 체크포인트 기반 리더보드 점수 재계산
-     * 
-     * @param userId 사용자 ID (Long)
-     * @param eventId 이벤트 ID
-     * @param eventDetailId 이벤트 상세 ID
-     * @param startTime 시작 시간 (Unix Timestamp)
-     */
-    fun recalculateLeaderboardScore(
-        userId: Long,
-        eventId: Long,
-        eventDetailId: Long,
-        startTime: Long
-    ) {
-        try {
-            // 모든 체크포인트 통과 시간 조회
-            val allPassTimes = checkpointTimesService.getAllCheckpointPassTimes(userId, eventId, eventDetailId)
-            
-            if (allPassTimes.isEmpty()) {
-                // 체크포인트 통과 기록이 없는 경우 시작 상태로 설정
-                updateLeaderboard(userId, eventId, eventDetailId, 0, 0L)
-                return
-            }
-            
-            // 가장 최근 체크포인트 찾기
-            val latestCheckpoint = allPassTimes.entries.maxByOrNull { it.value }
-            
-            if (latestCheckpoint != null) {
-                val checkpointOrder = extractCheckpointOrder(latestCheckpoint.key)
-                val cumulativeTime = latestCheckpoint.value - startTime
-                
-                updateLeaderboard(userId, eventId, eventDetailId, checkpointOrder, cumulativeTime)
-            }
-            
-        } catch (e: Exception) {
-            logger.error("리더보드 점수 재계산 실패: userId=$userId, eventDetailId=$eventDetailId", e)
-            throw e
-        }
-    }
-    
-    /**
-     * 대회 전체 순위 조회 (상위 N명)
-     * 
-     * @param eventDetailId 이벤트 상세 ID
-     * @param limit 조회할 상위 순위 수 (기본값: 100)
-     * @return 순위 리스트 (사용자 ID(Long)와 점수)
-     */
-    fun getTopRankings(
-        eventDetailId: String,
-        limit: Long = 100
-    ): List<Pair<Long, Double>> {
-        val key = generateLeaderboardKey(eventDetailId)
-        
-        return try {
-            // 점수 오름차순으로 상위 N명 조회 (낮은 점수가 높은 순위)
-            val rankings = redisTemplate.opsForZSet().rangeWithScores(key, 0, limit - 1)
-            
-            rankings?.mapNotNull { tuple ->
-                val member = tuple.value
-                val userId = when (member) {
-                    is Long -> member
-                    is String -> member.toLongOrNull()
-                    else -> null
-                }
-                userId?.let { it to tuple.score!! }
-            } ?: emptyList()
-            
-        } catch (e: Exception) {
-            logger.error("상위 순위 조회 실패: eventDetailId=$eventDetailId", e)
-            emptyList()
-        }
-    }
-    
-    /**
-     * 특정 사용자의 순위 조회
-     * 
-     * @param userId 사용자 ID (Long)
-     * @param eventDetailId 이벤트 상세 ID
-     * @return 사용자 순위 (1부터 시작, 없으면 null)
-     */
-    fun getUserRank(
-        userId: Long,
-        eventDetailId: String
-    ): Long? {
-        val key = generateLeaderboardKey(eventDetailId)
-        
-        return try {
-            // 사용자의 순위 조회 (0부터 시작하므로 +1)
-            val rank = redisTemplate.opsForZSet().rank(key, userId)
-            rank?.let { (it + 1L) }
-            
-        } catch (e: Exception) {
-            logger.error("사용자 순위 조회 실패: userId=$userId, eventDetailId=$eventDetailId", e)
-            null
-        }
-    }
-    
-    /**
-     * 특정 사용자의 점수 조회
-     * 
-     * @param userId 사용자 ID (Long)
-     * @param eventDetailId 이벤트 상세 ID
-     * @return 사용자 점수 (없으면 null)
-     */
-    fun getUserScore(
-        userId: Long,
-        eventDetailId: String
-    ): Double? {
-        val key = generateLeaderboardKey(eventDetailId)
-        
-        return try {
-            redisTemplate.opsForZSet().score(key, userId)
-            
-        } catch (e: Exception) {
-            logger.error("사용자 점수 조회 실패: userId=$userId, eventDetailId=$eventDetailId", e)
-            null
-        }
-    }
-    
-    /**
-     * 특정 순위 범위의 참가자 조회
-     * 
-     * @param eventDetailId 이벤트 상세 ID
-     * @param startRank 시작 순위 (1부터 시작)
-     * @param endRank 끝 순위 (1부터 시작)
-     * @return 순위 리스트 (사용자 ID(Long)와 점수)
-     */
-    fun getRankingsByRange(
-        eventDetailId: String,
-        startRank: Long,
-        endRank: Long
-    ): List<Pair<Long, Double>> {
-        val key = generateLeaderboardKey(eventDetailId)
-        
-        return try {
-            // 1부터 시작하는 순위를 0부터 시작하는 인덱스로 변환
-            val startIndex = maxOf(0, startRank - 1)
-            val endIndex = maxOf(0, endRank - 1)
-            
-            val rankings = redisTemplate.opsForZSet().rangeWithScores(key, startIndex, endIndex)
-            
-            rankings?.mapNotNull { tuple ->
-                val member = tuple.value
-                val userId = when (member) {
-                    is Long -> member
-                    is String -> member.toLongOrNull()
-                    else -> null
-                }
-                userId?.let { it to tuple.score!! }
-            } ?: emptyList()
-            
-        } catch (e: Exception) {
-            logger.error("순위 범위 조회 실패: eventDetailId=$eventDetailId, " +
-                "startRank=$startRank, endRank=$endRank", e)
-            emptyList()
-        }
-    }
-    
-    /**
      * 상위 3명의 랭커 userId(Long) 조회
      * 
      * leaderboard:{eventDetailId} Redis Sorted Set에서 해당 대회 코스(eventDetailId)의 상위 3명의 userId(Long)를 조회합니다.
@@ -265,8 +106,8 @@ class LeaderboardService(
      * @param eventDetailId 이벤트 상세 ID (EventDetail ID)
      * @return 상위 3명의 userId(Long) 리스트 (순위순으로 정렬)
      */
-    fun getTopRankers(eventDetailId: Long): List<Long> {
-        val key = generateLeaderboardKey(eventDetailId.toString())
+    fun getTopRankers(eventId: Long, eventDetailId: Long): List<Long> {
+        val key = generateLeaderboardKey(eventId.toString(), eventDetailId.toString())
         
         return try {
             logger.info("상위 3명 랭커 조회 시작: eventDetailId=$eventDetailId, key=$key")
@@ -299,8 +140,8 @@ class LeaderboardService(
      * @param eventDetailId 이벤트 상세 ID (EventDetail ID)
      * @return 상위 3명의 사용자 ID(Long)와 점수 정보 리스트
      */
-    fun getTopRankersWithScores(eventDetailId: String): List<Pair<Long, Double>> {
-        val key = generateLeaderboardKey(eventDetailId)
+    fun getTopRankersWithScores(eventId: String, eventDetailId: String): List<Pair<Long, Double>> {
+        val key = generateLeaderboardKey(eventId, eventDetailId)
         
         return try {
             logger.info("상위 3명 랭커 상세 조회 시작: eventDetailId=$eventDetailId, key=$key")
@@ -351,62 +192,6 @@ class LeaderboardService(
 //    }
     
     /**
-     * 리더보드 초기화
-     * 
-     * @param eventDetailId 이벤트 상세 ID
-     */
-    fun clearLeaderboard(
-        eventDetailId: String
-    ) {
-        val key = generateLeaderboardKey(eventDetailId)
-        
-        try {
-            redisTemplate.delete(key)
-            logger.info("리더보드 초기화 완료: eventDetailId=$eventDetailId")
-            
-        } catch (e: Exception) {
-            logger.error("리더보드 초기화 실패: eventDetailId=$eventDetailId", e)
-            throw e
-        }
-    }
-    
-    /**
-     * 특정 사용자 리더보드에서 제거
-     * 
-     * @param userId 사용자 ID (Long)
-     * @param eventDetailId 이벤트 상세 ID
-     */
-    fun removeUserFromLeaderboard(
-        userId: Long,
-        eventDetailId: String
-    ) {
-        val key = generateLeaderboardKey(eventDetailId)
-        
-        try {
-            redisTemplate.opsForZSet().remove(key, userId)
-            logger.info("사용자 리더보드 제거 완료: userId=$userId, eventDetailId=$eventDetailId")
-            
-        } catch (e: Exception) {
-            logger.error("사용자 리더보드 제거 실패: userId=$userId, eventDetailId=$eventDetailId", e)
-            throw e
-        }
-    }
-    
-    /**
-     * 점수로부터 체크포인트 정보 추출
-     * 
-     * @param score 점수
-     * @return 체크포인트 순서와 누적 시간의 Pair
-     */
-    fun extractCheckpointInfoFromScore(score: Double): Pair<Int, Long> {
-        val adjustedScore = score.toLong() - BASE_SCORE
-        val checkpointOrder = (adjustedScore / CHECKPOINT_WEIGHT).toInt()
-        val cumulativeTime = adjustedScore % CHECKPOINT_WEIGHT
-        
-        return Pair(checkpointOrder, cumulativeTime)
-    }
-    
-    /**
      * 체크포인트 ID에서 순서 추출
      * 
      * @param checkpointId 체크포인트 ID (예: "CP1", "CP2")
@@ -434,7 +219,7 @@ class LeaderboardService(
      * @param eventDetailId 이벤트 상세 ID
      * @return Redis Key
      */
-    private fun generateLeaderboardKey(eventDetailId: String): String {
-        return "$LEADERBOARD_KEY_PREFIX$KEY_SEPARATOR$eventDetailId"
+    private fun generateLeaderboardKey(eventId: String, eventDetailId: String): String {
+        return "$LEADERBOARD_KEY_PREFIX$KEY_SEPARATOR$eventId$KEY_SEPARATOR$eventDetailId"
     }
 } 

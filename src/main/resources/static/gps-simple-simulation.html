@@ -79,6 +79,12 @@
       <button id="createParticipantsBtn" class="btn setup">
         5. 테스트 참가자 생성
       </button>
+      <button id="checkTrackersBtn" class="btn setup">
+        6. 트래킹 목록 확인
+      </button>
+      <button id="addToTrackerBtn" class="btn setup">
+        7. 트래킹 목록에 추가
+      </button>
       <br />
       <button id="startBtn" class="btn">시뮬레이션 시작</button>
       <button id="stopBtn" class="btn stop">시뮬레이션 중지</button>
@@ -89,13 +95,8 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
       // 1. 유저 및 GPX 경로 상수
-      const USERS = [
-        { userId: 1, name: "김러너", color: "#ff4444" },
-        { userId: 2, name: "이스피드", color: "#44ff44" },
-        { userId: 3, name: "박마라톤", color: "#4444ff" },
-        { userId: 4, name: "최러닝", color: "#ffaa44" },
-        { userId: 5, name: "정트랙", color: "#aa44ff" },
-      ];
+      const TRACKER_USER_ID = 1; // 트래커를 조회할 유저 ID
+      let TRACKED_PARTICIPANTS = []; // 트래킹 중인 참가자 목록 (동적으로 로드됨)
       // GPX_POINTS 배열 - API에서 로드되는 실제 경로 좌표 (군산새만금 마라톤 코스)
       let GPX_POINTS = [
         [35.9640808249908, 126.747851371765],
@@ -144,6 +145,23 @@
         });
       }
 
+      // 참가자 색상 생성 함수
+      function getParticipantColor(index) {
+        const colors = [
+          "#ff4444", // 빨강
+          "#44ff44", // 초록
+          "#4444ff", // 파랑
+          "#ffaa44", // 주황
+          "#aa44ff", // 보라
+          "#ff44aa", // 분홍
+          "#44ffaa", // 청록
+          "#ffaa88", // 살구
+          "#88aaff", // 하늘
+          "#aaff88", // 연두
+        ];
+        return colors[index % colors.length];
+      }
+
       // Haversine 거리 계산 함수 (미터)
       function getDistance(lat1, lng1, lat2, lng2) {
         const R = 6371000;
@@ -159,10 +177,10 @@
       }
 
       // 3. GPS 데이터 생성 (10초 간격, 10m 오차, 유저별 속도/패턴)
-      function generateUserGpsArrays() {
+      function generateUserGpsArrays(activeUsers = USERS) {
         // 유저별 속도(2.7~3.4 m/s) 랜덤 부여
-        const userSpeeds = USERS.map(() => 2.7 + Math.random() * 0.7);
-        return USERS.map((user, idx) => {
+        const userSpeeds = activeUsers.map(() => 2.7 + Math.random() * 0.7);
+        return activeUsers.map((user, idx) => {
           let gpsArray = [];
           let totalTime = 0;
           for (let i = 0; i < GPX_POINTS.length - 1; i++) {
@@ -211,15 +229,82 @@
         });
       }
 
-      // 4. 10초마다 각 유저의 다음 포인트를 correct-location에 POST
+      // 4. 트래커 정보 조회 함수 (트래킹 중인 참가자 목록 가져오기)
+      async function getTrackerInfo(userId) {
+        try {
+          const res = await fetch(`/api/v1/trackers/${userId}`, {
+            method: "GET",
+            headers: { "Content-Type": "application/json" },
+          });
+
+          if (res.ok) {
+            const trackerData = await res.json();
+            log(
+              `📡 <b>트래커 ${userId}</b> 정보: <b>${res.status} ${
+                res.statusText
+              }</b><br><pre>${JSON.stringify(trackerData, null, 2)}</pre>`
+            );
+            return trackerData;
+          } else {
+            log(
+              `⚠️ <b>트래커 ${userId}</b> 조회 실패: ${res.status} ${res.statusText}`
+            );
+            return null;
+          }
+        } catch (e) {
+          log(`❌ <b>트래커 ${userId}</b> 조회 오류: ${e.message}`);
+          return null;
+        }
+      }
+
+      // 5. 10초마다 각 유저의 다음 포인트를 correct-location에 POST
       let simulationInterval = null;
       let userSimStates = [];
-      function startSimulation() {
+      async function startSimulation() {
         if (simulationInterval) {
           log("⚠️ 이미 실행 중입니다.");
           return;
         }
-        userSimStates = generateUserGpsArrays();
+
+        log("🔍 트래킹 중인 참가자 목록 조회 중...");
+
+        // 트래커 정보 조회 (트래킹 중인 참가자 목록 가져오기)
+        const trackerInfo = await getTrackerInfo(TRACKER_USER_ID);
+
+        if (
+          !trackerInfo ||
+          !trackerInfo.data ||
+          !trackerInfo.data.participants
+        ) {
+          log(
+            "❌ 트래킹 중인 참가자가 없습니다. 시뮬레이션을 시작할 수 없습니다."
+          );
+          log("💡 참가자를 먼저 생성하고 트래킹 목록에 추가해주세요.");
+          return;
+        }
+
+        // 트래킹 중인 참가자 목록 설정
+        TRACKED_PARTICIPANTS = trackerInfo.data.participants.map(
+          (participant, index) => ({
+            userId: participant.participantId,
+            name: participant.name || `참가자${participant.participantId}`,
+            color: getParticipantColor(index),
+            participantId: participant.participantId,
+            bibNumber: participant.bibNumber,
+          })
+        );
+
+        log(`✅ 트래킹 중인 참가자 ${TRACKED_PARTICIPANTS.length}명 발견`);
+        TRACKED_PARTICIPANTS.forEach((participant) => {
+          log(
+            `🏃 <b>${participant.name}</b> (ID: ${participant.userId}, 배번: ${participant.bibNumber})`
+          );
+        });
+
+        log("🚀 트래킹 중인 참가자들로 시뮬레이션 시작");
+
+        userSimStates = generateUserGpsArrays(TRACKED_PARTICIPANTS);
+
         // 마커 초기화
         userMarkers = {};
         userSimStates.forEach((user) => {
@@ -231,10 +316,10 @@
             radius: 10,
           })
             .addTo(map)
-            .bindPopup(`${user.name}`);
+            .bindPopup(`${user.name} (트래커 활성화)`);
           userMarkers[user.userId] = marker;
         });
-        log("🚀 시뮬레이션 시작");
+
         simulationInterval = setInterval(
           sendNextGpsPoints,
           INTERVAL_SECONDS * 1000
@@ -298,11 +383,34 @@
       // 6. 초기 설정 API 호출 함수들
       async function createTestEvent() {
         log("🏃 테스트 이벤트 생성 중...");
+
+        const requestBody = {
+          name: "서울 마라톤 2024",
+          sports: "마라톤",
+          startDateTime: "2025-07-22T16:17:30.328Z",
+          endDateTime: "2025-07-25T16:17:30.328Z",
+          country: "대한민국",
+          city: "서울",
+          address: "테스트 주소",
+          place: "테스트 장소",
+          latitude: 37.5413553485092,
+          longitude: 127.115719020367,
+          thumbnail: "string",
+        };
+
+        log(
+          `📤 이벤트 생성 요청: <pre>${JSON.stringify(
+            requestBody,
+            null,
+            2
+          )}</pre>`
+        );
+
         try {
-          const url = `/api/v1/gpx/create-test-event?eventId=${EVENT_ID}&name=테스트 이벤트`;
-          const res = await fetch(url, {
+          const res = await fetch(`/api/v1/gpx/create-test-event`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(requestBody),
           });
           const resText = await res.text();
           log(
@@ -318,11 +426,29 @@
 
       async function createTestCourse() {
         log("🏁 테스트 코스 생성 중...");
+
+        const requestBody = {
+          eventId: EVENT_ID,
+          courseName: "5km 코스",
+          distance: 5,
+          gpxFile: "string",
+          startDateTime: "2025-07-22T16:17:57.196Z",
+          endDateTime: "2025-07-25T16:17:57.196Z",
+        };
+
+        log(
+          `📤 코스 생성 요청: <pre>${JSON.stringify(
+            requestBody,
+            null,
+            2
+          )}</pre>`
+        );
+
         try {
-          const url = `/api/v1/gpx/create-test-course?eventId=${EVENT_ID}&courseName=테스트 코스`;
-          const res = await fetch(url, {
+          const res = await fetch(`/api/v1/gpx/create-test-course`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(requestBody),
           });
           const resText = await res.text();
           log(
@@ -411,13 +537,92 @@
         }
       }
 
+      async function checkTrackersStatus() {
+        log("🔍 트래킹 중인 참가자 목록 확인 중...");
+
+        log(`📡 트래커 유저 (ID: ${TRACKER_USER_ID})의 트래킹 목록 조회 중...`);
+
+        const trackerInfo = await getTrackerInfo(TRACKER_USER_ID);
+
+        if (trackerInfo && trackerInfo.data && trackerInfo.data.participants) {
+          const participants = trackerInfo.data.participants;
+          log(`✅ 트래킹 중인 참가자 ${participants.length}명 발견`);
+
+          participants.forEach((participant, index) => {
+            log(
+              `🏃 <b>${
+                participant.name || `참가자${participant.participantId}`
+              }</b> (ID: ${participant.participantId}, 배번: ${
+                participant.bibNumber
+              })`
+            );
+          });
+
+          return { participants: participants };
+        } else {
+          log(
+            `❌ 트래커 유저 (ID: ${TRACKER_USER_ID}) - 트래킹 중인 참가자 없음`
+          );
+          log("💡 참가자를 먼저 생성하고 트래킹 목록에 추가해주세요.");
+          return { participants: [] };
+        }
+      }
+
+      // 트래킹 목록에 참가자 추가 함수
+      async function addParticipantsToTracker() {
+        log("➕ 트래킹 목록에 참가자 추가 중...");
+
+        // 추가할 참가자 ID 목록 (테스트용 - 실제로는 참가자 생성 후 ID를 사용)
+        const participantIds = [1, 2, 3, 4, 5]; // 예시 참가자 ID들
+
+        for (const participantId of participantIds) {
+          const requestBody = {
+            userId: TRACKER_USER_ID,
+            eventId: EVENT_ID,
+            eventDetailId: EVENT_DETAIL_ID,
+            participantId: participantId,
+          };
+
+          log(
+            `📤 참가자 ${participantId} 트래킹 추가 요청: <pre>${JSON.stringify(
+              requestBody,
+              null,
+              2
+            )}</pre>`
+          );
+
+          try {
+            const res = await fetch("/api/v1/trackers", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(requestBody),
+            });
+
+            const resText = await res.text();
+            log(
+              `📥 참가자 ${participantId} 트래킹 추가 응답: <b>${res.status} ${res.statusText}</b><br><pre>${resText}</pre>`
+            );
+
+            if (res.ok) {
+              log(`✅ 참가자 ${participantId} 트래킹 목록에 추가 완료!`);
+            }
+          } catch (e) {
+            log(`❌ 참가자 ${participantId} 트래킹 추가 오류: ${e.message}`);
+          }
+        }
+
+        log(
+          "🔄 트래킹 목록 추가 완료. '트래킹 목록 확인' 버튼으로 확인해보세요."
+        );
+      }
+
       // API에서 GPX 파싱 데이터 로드
       async function loadGpxPointsFromApi() {
         log("📡 Redis에서 GPX 데이터 로드 중...");
 
         try {
           const res = await fetch(
-            `/api/v1/gpx/redis/${EVENT_ID}/${EVENT_DETAIL_ID}`,
+            `/api/v1/event-detail/gpx?eventId=${EVENT_ID}&eventDetailId=${EVENT_DETAIL_ID}`,
             {
               method: "GET",
               headers: {
@@ -535,6 +740,9 @@
       document.getElementById("loadGpxBtn").onclick = loadGpxPointsFromApi;
       document.getElementById("createParticipantsBtn").onclick =
         createTestParticipants;
+      document.getElementById("checkTrackersBtn").onclick = checkTrackersStatus;
+      document.getElementById("addToTrackerBtn").onclick =
+        addParticipantsToTracker;
       document.getElementById("startBtn").onclick = startSimulation;
       document.getElementById("stopBtn").onclick = stopSimulation;
 

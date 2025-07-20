@@ -2,21 +2,16 @@ spring:
   application:
     name: runtrack
 
-  # 데이터베이스 설정 - H2 인메모리 데이터베이스 사용 (테스트용)
+  # 데이터베이스 설정 - MySQL 데이터베이스 사용
   datasource:
-    url: jdbc:h2:mem:testdb
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
-
-  # H2 콘솔 설정
-  h2:
-    console:
-      enabled: true
+    url: jdbc:mysql://localhost:3306/runtrack?serverTimezone=Asia/Seoul&characterEncoding=UTF-8&useSSL=false&allowPublicKeyRetrieval=true
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: root
+    password: lifl1101@
 
   # JPA 설정
   jpa:
-    database-platform: org.hibernate.dialect.H2Dialect
+    database-platform: org.hibernate.dialect.MySQLDialect
     hibernate:
       ddl-auto: create-drop
     show-sql: true

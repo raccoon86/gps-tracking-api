@@ -33,7 +33,7 @@ data class EventDetail(
      */
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    val id: Long = 0,
+    val id: Long = 0L,
 
     /**
      * 이벤트 ID (Foreign Key)
@@ -45,14 +45,28 @@ data class EventDetail(
     val eventId: Long,
 
     /**
-     * 코스 거리 (킬로미터)
-     * 정수로 표현되는 코스의 총 거리
-     * 예: 5, 10, 21, 42 등
+     * 이벤트 시작 일시
+     * 이벤트가 시작되는 정확한 날짜와 시간
      */
-    @field:Positive(message = "거리는 양수여야 합니다")
+    @field:NotNull(message = "시작 일시는 필수입니다")
+    @Column(name = "start_date_time")
+    val startDateTime: LocalDateTime? = null,
+
+    /**
+     * 이벤트 종료 일시
+     * 이벤트가 종료되는 정확한 날짜와 시간
+     */
+    @field:NotNull(message = "종료 일시는 필수입니다")
+    @Column(name = "end_date_time")
+    val endDateTime: LocalDateTime? = null,
+
+    /**
+     * 코스 거리 (킬로미터)
+     * 예: 5, 10, 21, 42.12 등
+     */
     @field:Max(value = 1000, message = "거리는 1000km를 초과할 수 없습니다")
     @Column(name = "distance")
-    val distance: Int? = null,
+    val distance: Double? = null,
 
     /**
      * 코스명
@@ -69,7 +83,7 @@ data class EventDetail(
      * 실시간 위치 보정 및 코스 데이터 조회에 사용
      */
     @field:Size(max = 255, message = "GPX 파일 URL은 255자를 초과할 수 없습니다")
-    @Column(name = "gpx_file", length = 255)
+    @Column(name = "gpx_file", length = 255, nullable = false)
     val gpxFile: String,
 
     /**

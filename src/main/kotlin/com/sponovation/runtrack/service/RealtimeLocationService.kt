@@ -2,14 +2,13 @@ package com.sponovation.runtrack.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.sponovation.runtrack.dto.*
+import com.sponovation.runtrack.repository.ParticipantRepository
 import com.sponovation.runtrack.util.GeoUtils
+import kotlin.reflect.full.memberProperties
 import org.slf4j.LoggerFactory
 import org.springframework.data.redis.core.RedisTemplate
 import org.springframework.stereotype.Service
 import java.time.Instant
-import java.time.LocalDateTime
-import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 
 /**
@@ -32,7 +31,9 @@ class RealtimeLocationService(
     /** JSON 직렬화/역직렬화를 위한 ObjectMapper */
     private val objectMapper: ObjectMapper,
     /** 코스 데이터 서비스 - 거리 계산을 위한 코스 정보 제공 */
-    val courseDataService: CourseDataService
+    val courseDataService: CourseDataService,
+    /** 참가자 정보 조회를 위한 레포지토리 */
+    private val participantRepository: ParticipantRepository
 ) {
     
     /** 로깅을 위한 로거 인스턴스 */
@@ -41,14 +42,11 @@ class RealtimeLocationService(
     companion object {
         /** Redis 키 상수 정의 */
         
-        /** 위치 정보 저장을 위한 키 접두사 - "location:event:{eventDetailId}:participant:{userId}" 형태로 사용 */
-        private const val LOCATION_KEY_PREFIX = "location:event:"
-        
-        /** 참가자 키 접두사 - 위치 키와 조합하여 사용 */
-        private const val PARTICIPANT_KEY_PREFIX = "participant:"
-        
-        /** 순위 정보 저장을 위한 키 접두사 - "ranking:event:{eventDetailId}" 형태로 사용 */
-        private const val RANKING_KEY_PREFIX = "ranking:event:"
+        /** 위치 정보 저장을 위한 키 접두사 - "gps:{eventId}:{eventDetailId}:{userId}" 형태로 사용 */
+        private const val GPS_KEY_PREFIX = "gps"
+
+        /** 순위 정보 저장을 위한 키 접두사 - "leaderboard:{eventId}:{eventDetailId}" 형태로 사용 */
+        private const val LEADERBOARD_KEY_PREFIX = "leaderboard"
         
         /** 위치 데이터 TTL (Time To Live) - 30분 후 자동 삭제 */
         private const val LOCATION_TTL_MINUTES = 30L
@@ -80,26 +78,21 @@ class RealtimeLocationService(
      */
     fun saveParticipantLocation(
         userId: Long,
+        eventId: Long,
         eventDetailId: Long,
-        originalLat: Double,
-        originalLng: Double,
-        correctedLat: Double,
-        correctedLng: Double,
-        alt: Double? = null,
+        latitude: Double,
+        longitude: Double,
+        altitude: Double? = null,
         heading: Double? = null,
-        speed: Double? = null,
+        speed: Float? = null,
         timestamp: String
     ) {
         try {
             logger.info("참가자 위치 저장 시작: userId=$userId, eventDetailId=$eventDetailId")
             
-            // TODO: 실제 환경에서는 사용자 서비스에서 닉네임을 조회해야 함
-            // 현재는 테스트를 위해 임시 닉네임 생성
-            val nickname = "러너$userId"
-            
             // 코스 시작점으로부터의 실제 거리 계산
             // 이 값은 순위 결정에 중요한 역할을 함
-            val distanceFromStart = calculateDistanceFromStart(eventDetailId, correctedLat, correctedLng)
+            val distanceFromStart = calculateDistanceFromStart(eventDetailId, latitude, longitude)
             
             // 대회 시작부터 현재까지의 경과 시간 계산 (초 단위)
             // 실제로는 대회 공식 시작 시간을 기준으로 해야 함
@@ -108,126 +101,46 @@ class RealtimeLocationService(
             // 캐시에 저장할 위치 데이터 객체 생성
             val locationData = ParticipantLocationCache(
                 userId = userId,
+                eventId = eventId,
                 eventDetailId = eventDetailId,
-                nickname = nickname,
-                lat = originalLat,              // 원본 GPS 위치
-                lng = originalLng,              // 원본 GPS 위치
-                alt = alt,
-                heading = heading,
+                latitude = latitude,    // 보정된 위치 (지도에서 실제 표시될 위치)
+                longitude = longitude,    // 보정된 위치
+                altitude = altitude,
                 speed = speed,
-                timestamp = timestamp,
-                correctedLat = correctedLat,    // 보정된 위치 (지도에서 실제 표시될 위치)
-                correctedLng = correctedLng,    // 보정된 위치
-                distanceFromStart = distanceFromStart,
-                elapsedTimeSeconds = elapsedTimeSeconds
+                heading = heading,
+                created = timestamp,
             )
             
-            // Redis 키 생성: "location:event:{eventDetailId}:participant:{userId}"
-            val redisEventDetailId = eventDetailId.toString()
-            val redisUserId = userId.toString()
-            val locationKey = "$LOCATION_KEY_PREFIX$redisEventDetailId:$PARTICIPANT_KEY_PREFIX$redisUserId"
+            // Redis 키 생성: "gps:{eventId}:{eventDetailId}:{userId}"
+            val key = "$GPS_KEY_PREFIX:$eventId:$eventDetailId:$userId"
             
-            // 객체를 JSON 문자열로 직렬화
-            val jsonData = objectMapper.writeValueAsString(locationData)
+            // 기존 위치 데이터 존재 여부 확인
+            val existingData = redisTemplate.opsForHash<String, Any>().entries(key)
+            val isUpdate = existingData.isNotEmpty()
             
-            // Redis에 저장 (30분 TTL 설정으로 메모리 관리)
-            redisTemplate.opsForValue().set(locationKey, jsonData, LOCATION_TTL_MINUTES, TimeUnit.MINUTES)
+            // Redis Hash에 저장/업데이트 (30분 TTL 설정으로 메모리 관리)
+            redisTemplate.opsForHash<String, Any>().putAll(key, mapOf(
+                "userId" to locationData.userId,
+                "eventId" to locationData.eventId,
+                "eventDetailId" to locationData.eventDetailId,
+                "latitude" to locationData.latitude,
+                "longitude" to locationData.longitude,
+                "altitude" to locationData.altitude,
+                "speed" to locationData.speed,
+                "heading" to locationData.heading,
+                "created" to locationData.created
+            ))
+            redisTemplate.expire(key, LOCATION_TTL_MINUTES, TimeUnit.MINUTES)
             
             // 실시간 순위 업데이트 (거리 기준)
-            updateRanking(eventDetailId, userId, distanceFromStart, elapsedTimeSeconds)
+            updateRanking(eventId, eventDetailId, userId, distanceFromStart, elapsedTimeSeconds)
             
-            logger.info("참가자 위치 저장 완료: userId=$userId, distance=${String.format("%.2f", distanceFromStart)}m")
+            val action = if (isUpdate) "업데이트" else "저장"
+            logger.info("참가자 위치 $action 완료: userId=$userId, distance=${String.format("%.2f", distanceFromStart)}m")
             
         } catch (e: Exception) {
             logger.error("참가자 위치 저장 실패: userId=$userId, eventDetailId=$eventDetailId", e)
             throw RuntimeException("참가자 위치 저장에 실패했습니다: ${e.message}", e)
-        }
-    }
-    
-    /**
-     * 대회의 모든 참가자 위치를 조회합니다.
-     * 
-     * 처리 과정:
-     * 1. Redis에서 해당 대회의 모든 참가자 위치 키 검색
-     * 2. 각 키에서 위치 데이터 조회 및 역직렬화
-     * 3. 줌 레벨에 따른 위치 정밀도 조정
-     * 4. 상위 3명 순위 정보 조회
-     * 5. 응답 DTO 생성 및 반환
-     * 
-     * @param eventDetailId 대회 상세 정보 ID
-     * @param zoomLevel 지도 줌 레벨 (정밀도 조정용, 선택사항)
-     * @return 실시간 위치 응답 DTO (참가자 위치 목록 + 상위 3명 순위)
-     * 
-     * @throws RuntimeException 위치 조회 실패 시
-     */
-    fun getParticipantsLocations(eventDetailId: Long, zoomLevel: Int? = null): RealtimeLocationResponseDto {
-        try {
-            logger.info("참가자 위치 조회 시작: eventDetailId=$eventDetailId, zoomLevel=$zoomLevel")
-            
-            // 해당 대회의 모든 참가자 키 패턴 생성
-            val redisEventDetailId = eventDetailId.toString()
-            val pattern = "$LOCATION_KEY_PREFIX$redisEventDetailId:$PARTICIPANT_KEY_PREFIX*"
-            
-            // Redis에서 패턴에 매칭되는 모든 키 조회
-            val keys = redisTemplate.keys(pattern)
-            
-            logger.info("발견된 참가자 수: ${keys.size}")
-            
-            val participants = mutableListOf<ParticipantLocationDto>()
-            
-            // 각 참가자의 위치 데이터 처리
-            for (key in keys) {
-                try {
-                    // Redis에서 JSON 데이터 조회
-                    val jsonData = redisTemplate.opsForValue().get(key) as? String
-                    if (jsonData != null) {
-                        // JSON을 객체로 역직렬화
-                        val locationData = objectMapper.readValue(jsonData, ParticipantLocationCache::class.java)
-                        
-                        // 줌 레벨에 따른 위치 정밀도 조정
-                        // 네트워크 대역폭 절약 및 개인정보 보호 목적
-                        val adjustedLocation = adjustLocationPrecision(
-                            locationData.correctedLat, 
-                            locationData.correctedLng, 
-                            zoomLevel
-                        )
-                        
-                        // 클라이언트에 전송할 DTO 생성
-                        participants.add(
-                            ParticipantLocationDto(
-                                userId = locationData.userId,
-                                nickname = locationData.nickname,
-                                lat = adjustedLocation.first,      // 조정된 위도
-                                lng = adjustedLocation.second,     // 조정된 경도
-                                alt = locationData.alt,
-                                heading = locationData.heading,
-                                speed = locationData.speed,
-                                timestamp = locationData.timestamp
-                            )
-                        )
-                    }
-                } catch (e: Exception) {
-                    // 개별 참가자 데이터 파싱 실패 시 로그만 남기고 계속 진행
-                    logger.warn("참가자 위치 데이터 파싱 실패: key=$key", e)
-                }
-            }
-            
-            // 상위 3명 순위 정보 조회
-            val top3 = getTop3Ranking(eventDetailId)
-            
-            logger.info("참가자 위치 조회 완료: 총 ${participants.size}명, 상위 3명")
-            
-            // 최종 응답 DTO 생성
-            return RealtimeLocationResponseDto(
-                data = RealtimeLocationDataDto(
-                    participants = participants,
-                    top3 = top3
-                )
-            )
-            
-        } catch (e: Exception) {
-            logger.error("참가자 위치 조회 실패: eventDetailId=$eventDetailId", e)
-            throw RuntimeException("참가자 위치 조회에 실패했습니다: ${e.message}", e)
         }
     }
     
@@ -331,11 +244,10 @@ class RealtimeLocationService(
      * @param distanceFromStart 시작점으로부터의 거리
      * @param elapsedTimeSeconds 경과 시간 (현재 미사용, 향후 확장용)
      */
-    private fun updateRanking(eventDetailId: Long, userId: Long, distanceFromStart: Double, elapsedTimeSeconds: Long) {
+    private fun updateRanking(eventId: Long, eventDetailId: Long, userId: Long, distanceFromStart: Double, elapsedTimeSeconds: Long) {
         try {
-            // 순위 정보를 저장할 Redis Sorted Set 키
-            val redisEventDetailId = eventDetailId.toString()
-            val rankingKey = "$RANKING_KEY_PREFIX$redisEventDetailId"
+            // 순위 정보를 저장할 Redis Sorted Set 키: "leaderboard:{eventId}:{eventDetailId}"
+            val rankingKey = "$LEADERBOARD_KEY_PREFIX:$eventId:$eventDetailId"
             
             // Sorted Set에 사용자 추가/업데이트
             // Score가 높을수록 상위 순위 (거리가 멀수록 앞순위)
@@ -345,132 +257,7 @@ class RealtimeLocationService(
             redisTemplate.expire(rankingKey, LOCATION_TTL_MINUTES, TimeUnit.MINUTES)
             
         } catch (e: Exception) {
-            logger.warn("순위 업데이트 실패: eventDetailId=$eventDetailId, userId=$userId", e)
+            logger.warn("순위 업데이트 실패: eventId=$eventId, eventDetailId=$eventDetailId, userId=$userId", e)
         }
-    }
-    
-    /**
-     * 상위 3명의 순위를 조회합니다.
-     * 
-     * 처리 과정:
-     * 1. Redis Sorted Set에서 상위 3명 조회 (점수 내림차순)
-     * 2. 각 사용자의 상세 정보를 위치 캐시에서 조회
-     * 3. 순위, 닉네임, 배번, 경과 시간 등 포함한 DTO 생성
-     * 
-     * 반환 정보:
-     * - 순위 (1, 2, 3위)
-     * - 사용자 ID 및 닉네임
-     * - 배번 (임시로 "A{userId}"로 생성)
-     * - 경과 시간 (HH:MM:SS 형식)
-     * 
-     * @param eventDetailId 대회 상세 정보 ID
-     * @return 상위 3명의 순위 정보 리스트
-     */
-    private fun getTop3Ranking(eventDetailId: Long): List<RankingDto> {
-        return try {
-            val redisEventDetailId = eventDetailId.toString()
-            val rankingKey = "$RANKING_KEY_PREFIX$redisEventDetailId"
-            
-            // Sorted Set에서 점수 내림차순으로 상위 3명 조회
-            // reverseRange: 높은 점수부터 조회 (더 멀리 간 순서)
-            val top3UserIds = redisTemplate.opsForZSet().reverseRange(rankingKey, 0, 2)
-            
-            val rankings = mutableListOf<RankingDto>()
-            
-            // 각 상위 사용자에 대해 상세 정보 생성
-            top3UserIds?.forEachIndexed { index, userIdStr ->
-                val userId = userIdStr.toString()
-                val eventDetailId = eventDetailId.toString()
-                if (userId != null) {
-                    // 해당 사용자의 위치 캐시에서 추가 정보 조회
-                    val locationKey = "$LOCATION_KEY_PREFIX$eventDetailId:$PARTICIPANT_KEY_PREFIX$userId"
-                    val jsonData = redisTemplate.opsForValue().get(locationKey) as? String
-                    
-                    if (jsonData != null) {
-                        val locationData = objectMapper.readValue(jsonData, ParticipantLocationCache::class.java)
-                        
-                        rankings.add(
-                            RankingDto(
-                                rank = index + 1,  // 1위, 2위, 3위
-                                userId = userId.toLong(),
-                                nickname = locationData.nickname,
-                                bibNumber = "A${userId.toString().padStart(3, '0')}", // TODO: 실제 배번 시스템 연동 필요
-                                elapsedTime = formatElapsedTime(locationData.elapsedTimeSeconds)
-                            )
-                        )
-                    }
-                }
-            }
-            
-            rankings
-            
-        } catch (e: Exception) {
-            logger.warn("상위 3명 순위 조회 실패: eventDetailId=$eventDetailId", e)
-            emptyList()
-        }
-    }
-    
-    /**
-     * 줌 레벨에 따라 위치 정밀도를 조정합니다.
-     * 
-     * 목적:
-     * 1. 네트워크 대역폭 절약 (불필요한 정밀도 제거)
-     * 2. 개인정보 보호 (과도한 위치 정밀도 방지)
-     * 3. 지도 렌더링 성능 최적화
-     * 
-     * 정밀도 레벨:
-     * - 낮은 줌 (1-10): 소수점 3자리 (약 111m 정밀도)
-     * - 중간 줌 (11-15): 소수점 5자리 (약 1.1m 정밀도)
-     * - 높은 줌 (16+): 원본 정밀도 유지 (약 1cm 정밀도)
-     * 
-     * @param lat 원본 위도
-     * @param lng 원본 경도
-     * @param zoomLevel 지도 줌 레벨 (null인 경우 원본 정밀도 유지)
-     * @return 조정된 위도, 경도 쌍
-     */
-    private fun adjustLocationPrecision(lat: Double, lng: Double, zoomLevel: Int?): Pair<Double, Double> {
-        return when (zoomLevel) {
-            in 1..10 -> {
-                // 낮은 줌 레벨: 소수점 3자리까지 (약 111m 정밀도)
-                val adjustedLat = String.format("%.3f", lat).toDouble()
-                val adjustedLng = String.format("%.3f", lng).toDouble()
-                Pair(adjustedLat, adjustedLng)
-            }
-            in 11..15 -> {
-                // 중간 줌 레벨: 소수점 5자리까지 (약 1.1m 정밀도)
-                val adjustedLat = String.format("%.5f", lat).toDouble()
-                val adjustedLng = String.format("%.5f", lng).toDouble()
-                Pair(adjustedLat, adjustedLng)
-            }
-            else -> {
-                // 높은 줌 레벨 또는 줌 레벨 미지정: 원본 정밀도 유지
-                Pair(lat, lng)
-            }
-        }
-    }
-    
-    /**
-     * 경과 시간을 HH:MM:SS 형식으로 포맷합니다.
-     * 
-     * 변환 과정:
-     * 1. 전체 초를 시간, 분, 초로 분할
-     * 2. 각 단위를 2자리 형식으로 포맷 (01, 02, ... 형태)
-     * 3. 콜론(:)으로 구분된 시간 문자열 생성
-     * 
-     * 예시:
-     * - 3665초 → "01:01:05"
-     * - 7323초 → "02:02:03"
-     * - 86400초 → "24:00:00"
-     * 
-     * @param seconds 경과 시간 (초 단위)
-     * @return HH:MM:SS 형식의 시간 문자열
-     */
-    private fun formatElapsedTime(seconds: Long): String {
-        val hours = seconds / 3600      // 3600초 = 1시간
-        val minutes = (seconds % 3600) / 60  // 나머지를 60으로 나눈 몫 = 분
-        val secs = seconds % 60         // 60으로 나눈 나머지 = 초
-        
-        // %02d: 2자리 수로 포맷, 부족하면 0으로 패딩
-        return String.format("%02d:%02d:%02d", hours, minutes, secs)
     }
 } 

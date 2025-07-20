@@ -1,6 +1,5 @@
 package com.sponovation.runtrack.repository
 
-import com.sponovation.runtrack.domain.Gender
 import com.sponovation.runtrack.domain.Participant
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
@@ -21,6 +20,9 @@ import java.time.LocalDateTime
 interface ParticipantRepository : JpaRepository<Participant, Long> {
 
     fun existsByEventIdAndEventDetailIdAndUserId(eventId: Long, eventDetailId: Long, userId: Long): Boolean
+
+    fun existsByUserId(userId: Long): Boolean
+
     /**
      * 이벤트 ID로 참가자 목록 조회 (생성일시 내림차순, 페이징)
      */
@@ -66,4 +68,33 @@ interface ParticipantRepository : JpaRepository<Participant, Long> {
         @Param("cursorCreatedAt") cursorCreatedAt: LocalDateTime?,
         @Param("limit") limit: Pageable
     ): List<Participant>
+
+    /**
+     * 사용자가 트래킹하는 모든 참가자 정보 조회
+     */
+    @Query("""
+        SELECT p 
+        FROM Tracker t 
+        JOIN Participant p ON t.participantId = p.id
+        WHERE t.userId = :userId
+        ORDER BY t.createdAt DESC
+    """)
+    fun findParticipantsByUserId(@Param("userId") userId: Long): List<Participant>
+
+    /**
+     * 특정 이벤트에서 사용자가 트래킹하는 참가자 정보 조회
+     */
+    @Query("""
+        SELECT p 
+        FROM Tracker t 
+        JOIN Participant p ON t.participantId = p.id
+        WHERE t.userId = :userId AND t.eventId = :eventId AND t.eventDetailId = :eventDetailId
+        ORDER BY t.createdAt DESC
+    """)
+    fun findParticipantsByUserIdAndEventIdAndEventDetailId(
+        @Param("userId") userId: Long,
+        @Param("eventId") eventId: Long,
+        @Param("eventDetailId") eventDetailId: Long
+    ): List<Participant>
+
 } 
