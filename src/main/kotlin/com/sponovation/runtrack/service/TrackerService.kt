@@ -120,7 +120,7 @@ class TrackerService(
 //            throw IllegalArgumentException("존재하지 않는 사용자입니다: ${request.userId}")
 //        }
         
-        if (!participantRepository.existsById(request.participantId)) {
+        if (!participantRepository.existsByUserId(request.participantId)) {
             throw IllegalArgumentException("존재하지 않는 참가자입니다: ${request.participantId}")
         }
 
